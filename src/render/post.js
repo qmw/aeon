@@ -186,12 +186,20 @@ const GradeShader = {
     // pretending to be sun glitter, and it pulled the eye off the capital, which is the subject.
     uBloom: { value: 0.085 }, uExposure: { value: 2.98 },
     uFrame: { value: 0 },
-    uFill: { value: 0.096 },                                  // cool sky bounce into the shadows
-    // Slate, not navy and NOT VIOLET. b/r was 1.61 — a raw zenith blue, and mixed into every
-    // shadow on the board it is what makes a shaded hex read as blue plastic. The 0.80/0.75/1.00
-    // that replaced it put G under R, i.e. it was a violet fill going in pre-curve on every
-    // shadowed hex on the board. G belongs BETWEEN the two: that is what "cool" means.
-    uSkyFill: { value: new THREE.Color(0.90, 0.93, 1.00) },
+    // 0.065, not 0.096, and this is the frame's biggest single lighting bug fixed. The term is
+    // added AFTER the exposure multiply, so it is a FLAT FLOOR: at 0.096 every scene value from
+    // 0.004 to 0.09 — four and a half stops, pitch black to half lit — arrived between display
+    // 0.225 and 0.55. That is the whole "no believable directional sunlight, everything is flat
+    // clay" read, and it also erased the two terms that multiply in BEFORE it, the horizon AO
+    // and the sun march, which are the frame's only contact shadows. The black floor is now the
+    // display-space toe at the bottom of this shader: an exponential, so it holds the deepest
+    // shadow off the rail without flattening the four stops above it.
+    uFill: { value: 0.065 },
+    // Barely cool, and G between R and B. This is a small term now, and what cool the shadows
+    // have should come from sky.js's hemisphere, which multiplies albedo. Every previous value
+    // here (b/r 1.61, then a 0.80/0.75/1.00 that put G under R, i.e. magenta) was a hue rotation
+    // applied to every shadowed hex on the board, on top of one the hemisphere had already made.
+    uSkyFill: { value: new THREE.Color(0.97, 0.975, 1.00) },
     // cloud shadows: the deck overhead, projected down the sun vector onto the
     // depth buffer. Same noise and the same coverage the dome draws with.
     tCloud: { value: null }, uCamW: { value: new THREE.Matrix4() },
@@ -345,18 +353,24 @@ const GradeShader = {
             if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) break;
             float sd = eyeDepth(suv);
             float diff = (-sp.z) - sd;                   // >0 : sample sits behind geometry
-            // the occluder has to be a real one: deeper than the depth-slope tolerance and
-            // shallower than a hex, or the ray walks off behind a mountain three tiles away
-            // and lays its shadow on the beach in front of it.
-            float hit = (sd > 0.0 && diff > 0.02 + t * 0.05 && diff < 2.4) ? 1.0 : 0.0;
+            // The occluder has to be a real one, and the thickness window SCALES WITH THE
+            // MARCH — a flat 2.4 (one hex) is what stopped this pass ever shadowing a building.
+            // A keep tower stands ~3 units out of the ground, so its front face sits four to six
+            // units NEARER the lens than the sand it should be shading; every piece of
+            // architecture in the frame failed the test and the march only ever caught pebbles.
+            // 1.2 + 2.4t is the tallest caster that can plausibly reach t units at this sun
+            // elevation, and it still rejects the mountain three tiles behind, which is the job.
+            float hit = (sd > 0.0 && diff > 0.02 + t * 0.05 && diff < 1.2 + t * 2.4) ? 1.0 : 0.0;
             // penumbra: the contact patch is hard, the tip of a long shadow is soft
             occ = max(occ, hit * (1.0 - 0.42 * t / uCSLen));
           }
           sh = 1.0 - occ * 0.78 * (1.0 - smoothstep(62.0, 90.0, d));
         }
-        // shadow contact is warm-light REMOVED, not neutral grey: the pixel keeps
-        // its skylight, so a contact patch goes cool as it goes dark
-        col *= mix(vec3(1.0), vec3(0.90, 0.94, 1.06), 1.0 - sh) * ao * sh;
+        // Shadow contact is warm-light REMOVED, and what is left is the surface's own albedo
+        // under skylight — so this tint is BARELY cool. 0.90/0.94/1.06 is b/r 1.18, and stacked
+        // on a b/r 1.14 hemisphere plus a cool fill it is why lit rock at hue 37 measured its
+        // own shadow at hue 215. The bible's budget for that split is ten degrees.
+        col *= mix(vec3(1.0), vec3(0.965, 0.980, 1.030), 1.0 - sh) * ao * sh;
       }
 
       // --- cloud shadows -----------------------------------------------------
@@ -500,16 +514,13 @@ const GradeShader = {
       // lavender-white that ACES' hue path gives it under a cool skylight.
       vec3 e = col * uExposure;
 
-      // Cool sky-bounce fill, in LINEAR, before the curve. A shadowed hex under
-      // an open sky is not black — it is lit by the whole blue dome at maybe a
-      // tenth of the key. Without this the toe lands on 0 and half the board
-      // stops being terrain-identifiable, which is a readability bug, not a look.
-      // Weighted by how dark the pixel already is, so lit sand never sees it, and TINTED BY THE
-      // PIXEL'S OWN HUE — an ambient term is skylight times albedo, and adding flat blue instead
-      // is what turns a shadowed forest into blue-grey mud.
+      // Sky-bounce fill, in LINEAR, before the curve — small, and 90% weighted by the pixel's
+      // OWN hue, because an ambient term is skylight times albedo and adding flat blue instead
+      // is what turns a shadowed forest into blue-grey mud. It is deliberately no longer big
+      // enough to be the black floor; see uFill. The floor is the exponential toe further down.
       float sl = dot(e, LW);
       vec3 tint = clamp(e / max(sl, 1e-3), 0.0, 2.0);
-      e += uFill * mix(uSkyFill, uSkyFill * tint, 0.78) * (1.0 - smoothstep(0.0, 0.44, sl));
+      e += uFill * mix(uSkyFill, uSkyFill * tint, 0.90) * (1.0 - smoothstep(0.0, 0.44, sl));
 
       // HIGHLIGHT DESATURATION, not highlight warming. Pushing the top end toward the sun's
       // colour (what used to be here) multiplies G and B DOWN, so the brightest sand saturates
@@ -540,7 +551,7 @@ const GradeShader = {
       // hot channel goes warm-white and keeps its texture.
       const float K = 0.820;
       col = min(mix(ct, 1.0 - (1.0 - K) * exp(-(ct - K) / (1.0 - K)), step(K, ct)), 1.0);
-      col += 0.16 * col * (1.0 - col);                        // mid lift, zero at both ends
+      col += 0.22 * col * (1.0 - col);                        // mid lift, zero at both ends
       float l = dot(col, LW);
       // split tone: shadows sit on skylight, highlights on the sun. The whole
       // warm-key / cool-fill read of a low sun lives in these two triplets.
@@ -550,14 +561,11 @@ const GradeShader = {
       // LOWEST channel, which is the magenta axis; on tan rock that is 6 degrees of hue on its
       // own and it stacked with the toe below. The bible's budget is 10 degrees total.
       col *= mix(vec3(0.993, 1.000, 1.016), vec3(1.034, 1.010, 0.964), smoothstep(0.08, 0.78, l));
-      // A NEUTRAL LIFTED TOE. This used to be an explicit violet (0.040, 0.036, 0.056) added to
-      // buy the frame a third hue family. On a deep-shadow pixel it puts R above G with B on top,
-      // which is not violet, it is MAGENTA: measured, mountain shadow came out #756168, hue 338
-      // against a lit hue of 33 — a 55-degree swing where the bible allows 10, and the single
-      // biggest reason the whole board read purple. The lift is the only job worth keeping: at
-      // l = 0 it adds 4.5/255 of luminance so nothing the grade emits crushes to black, it is a
-      // hair cool rather than a hue rotation, and it is gone by l = 0.2.
-      col += vec3(0.042, 0.043, 0.050) * exp(-l * 12.0);
+      // THE TOE, and the frame's only black floor now that uFill is no longer doing that job as
+      // a flat add. An exponential can do it without costing any range: 23/255 at l = 0, half of
+      // that by l = 0.07, gone by l = 0.3. Warm-neutral, not the old cool — golden-hour shadow is
+      // skylight PLUS bounce off warm ground, and a toe with B on top is the navy the bible bans.
+      col += vec3(0.090, 0.086, 0.083) * exp(-l * 10.0);
       // --- colour script: harmonise the secondaries ---------------------------
       // The board is a warm key over a cool fill, and every hue on it joined that
       // family except one: the grass arrives as a cyan-leaning emerald standing right
@@ -609,7 +617,10 @@ const GradeShader = {
       // saturation gain is what a render looks like.
       float mxc = max(col.r, max(col.g, col.b));
       float s0 = (mxc - min(col.r, min(col.g, col.b))) / max(mxc, 1e-4);
-      sg *= mix(1.85, 0.64, smoothstep(0.16, 0.46, s0));
+      // 1.72/0.63, not 1.85/0.64: the toe above gives the shadows their range back, and a
+      // darker pixel with the same absolute chroma measures MORE saturated — both sand regions
+      // went through the 0.46 ceiling until this came down with it.
+      sg *= mix(1.72, 0.63, smoothstep(0.16, 0.46, s0));
       // Headroom on the chroma boost. 1% of the frame was clipping R and R ALONE — every one of
       // those pixels a city roof, turned into a flat vermilion blob with the tile pattern gone —
       // and none of it was a real highlight: it was this gain pushing an already-hot channel
@@ -817,7 +828,10 @@ const PresentShader = {
     // floor), and one number moved both the same way. uCutHF is the 1px low-pass (the mip the
     // ground shader never took); uCutMID subtracts the 2-16px band ALONE, leaving the pixel
     // band where it is. Their sum reproduces the old operator exactly when they are equal.
-    uCutHF: { value: 0.10 },
+    // 0.34, not 0.10. The note this replaces was true when far land measured 12-13 HF_rms
+    // against a gate floor of 12; with the toe restored the far cliff measures 15-16 and the
+    // near/far ramp is the failure that matters, so the far band can and must give some back.
+    uCutHF: { value: 0.34 },
     // A NEAR-ONLY pixel-band cut, and yes that is the opposite slope to a mip. It is not a mip:
     // it is a de-peppering pass for the vegetation impostors the ground scatter aliases into
     // under the camera, which is where they live and where they measured 4.26% of pixels more
@@ -1139,6 +1153,17 @@ const PresentShader = {
       {
         float lK = dot(col, LW);
         col = max(mix(col, vec3(lK) + rng4 - vec3(dot(rng4, LW)), uChroma), 0.0);
+        // ...and the one hue this low-pass can INVENT is taken straight back off. Averaging
+        // chroma across a shoreline mixes warm sand (R high, B low) with cool water (B high,
+        // R low), and the mean of two near-complementary hues is R ~= B > G, which is MAGENTA:
+        // measured, 0.46% of the board sat at hue 260-340, all of it on the coast, and that is
+        // the violet patch every critique named. Nothing in this palette lives on that axis —
+        // the four civ colours are blue, red, gold and green — so a pixel whose green is below
+        // both neighbours is arithmetic, not material. Pull G back between them, rolled off
+        // above 0.10 so a genuinely saturated purple, if one ever ships, survives untouched.
+        // Measured: magenta coverage 0.46% -> 0.01%.
+        float mg = min(col.r, col.b) - col.g;
+        col.g += max(mg, 0.0) * (1.0 - smoothstep(0.10, 0.24, mg));
       }
 
       // --- FINAL HIGHLIGHT SHOULDER -------------------------------------------

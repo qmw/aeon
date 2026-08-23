@@ -394,27 +394,19 @@ export class Sky {
       // That split is what stops shadowed rock reading as neutral black — the
       // vertical walls of the hex columns see almost nothing else.
       const sky = new THREE.Color(), gnd = new THREE.Color();
-      // b/r was 1.81 — a raw zenith sample, and Lambert terrain has no other ambient, so every
-      // cast shadow in the frame arrived as navy on tan (measured hue rotation: 90-100 deg off
-      // the lit hue). Real skylight reaching a shadowed hex is already mixed with the bounce off
-      // everything around it. b/r 1.52 and a warmer, stronger ground term is that mix, done here
-      // where it still respects surface orientation instead of as a flat lift in post.
-      // b/r 1.14, not 1.52. Terrain is Lambert and this hemisphere IS its entire ambient, so
-      // this pair alone decides the hue of every shaded hex on the board — and at a raw zenith
-      // blue it decided BLUE: measured, lit rock #776a60 hue 26 against its own shadow #535563
-      // hue 232, against the bible's 10-degree budget. Skylight reaching a shadowed hex is
-      // already mixed with the bounce off everything warm around it; warm-neutral sky over a
-      // stronger warm ground term is that mix, and it lets the surface's own albedo carry the
-      // hue the way the bible's 'albedo-weighted ambient with ground bounce' says it should.
-      lerpC(sky, [0.09, 0.12, 0.21], [0.70, 0.735, 0.80], day);
-      lerpC(gnd, [0.05, 0.05, 0.06], [0.48, 0.375, 0.25], day);
+      // Warm-neutral sky over a strong warm ground bounce, and since post.js stopped laying a
+      // flat additive lift over the shadows this pair IS the whole shadow budget. That is the
+      // right place for it: a hemisphere multiplies albedo and respects surface orientation, so
+      // a shaded hex keeps the hue of its own material instead of taking the fill's — which is
+      // exactly what the bible means by "ambient is albedo-weighted with ground bounce", and
+      // what keeps lit and shadow inside its ten-degree hue budget. A raw zenith blue here
+      // (b/r 1.81, then 1.52, then 1.14) is how every previous build got navy shadows on tan.
+      lerpC(sky, [0.09, 0.12, 0.21], [0.72, 0.735, 0.78], day);
+      lerpC(gnd, [0.05, 0.05, 0.06], [0.58, 0.450, 0.30], day);
       this.hemi.color.copy(sky); this.hemi.groundColor.copy(gnd);
-      // The fill carries every shadowed hex on the board: terrain is Lambert with no GI, so
-      // whatever this misses, post.js has to fake back in as a flat lift. Better here, where it
-      // still respects surface orientation. Deliberately UNDER a third of the key: at 0.72 the
-      // ambient was filling every cast shadow back in, which is why a frame full of working
-      // shadow maps read as a frame with no shadows in it at all.
-      this.hemi.intensity = 0.19 + 0.37 * day;
+      // Still well under a third of the key: an ambient that fills its own cast shadows back in
+      // is how a frame full of working shadow maps reads as a frame with none.
+      this.hemi.intensity = 0.19 + 0.43 * day;
     }
     this._airlight(day, g3);
   }
