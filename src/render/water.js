@@ -925,17 +925,33 @@ function buildRivers(map, cornerY, levels) {
     for (let i = 0; i < N; i++) {
       const s = i / Math.max(1, N - 1);
       const head = spring ? 0.42 + 0.58 * Math.pow(Math.min(1, i / Math.max(1, N * 0.34)), 0.60) : 1;
-      // estuary: the last stretch flares into a mouth instead of stopping on a blunt end
-      const flare = toSea ? 1 + 1.05 * Math.pow(Math.max(0, s - 0.80) / 0.20, 1.6) : 1;
-      pts[i].w *= head * (0.80 + 0.20 * s) * flare;
+      // NO ESTUARY FLARE. It doubled the channel over the last fifth of a chain — i.e. exactly
+      // where `fade` is taking the ribbon away — so the mouth arrived as a 3 u wide half-
+      // transparent apron instead of a river. The taper below ends the reach instead.
+      pts[i].w *= head * (0.80 + 0.20 * s);
       // The estuary flares AND THEN GOES TO ZERO. No ribbon may survive onto the sea plane: an
       // opaque fan of river water lying on open water, clipped by a straight edge where the
       // mesh runs out, is the worst thing this file has ever drawn. The delta itself is the
       // sediment plume the sea shader reads out of the field texture — see `plume`.
       const q = toSea ? Math.max(0, (s - 0.82) / 0.18) : 0;
+      // ...AND IT HAS TO DIE AT THE WATERLINE, not 18% of a chain later. `flare` widens the
+      // channel up to 2.05x at the mouth and lipY is 0.165 + 0.66w, so the last few nodes were
+      // building a levee a metre tall and three units wide STANDING ON THE SEA — that is the
+      // translucent mauve slab over the shallows and the stacked planes beside it, drawn as
+      // pure haze because nothing offshore ever clipped its buried toes. A chain's arc fraction
+      // cannot know where the coast is; the tile under the node can.
+      const ax = worldToAxial(pts[i].x, pts[i].z), wt = map.get(ax.q, ax.r);
+      const dry = (!wt || wt.height > 0) ? 1 : 0;
       pts[i].fade = (spring ? Math.min(1, 0.18 + i / Math.max(1.0, N * 0.13)) : 1)
-                  * (1 - q * q * (3 - 2 * q));
+                  * (1 - q * q * (3 - 2 * q)) * dry;
     }
+    // ramp the last few dry nodes down into the mouth, so the reach ends in the water rather
+    // than on a chord across it
+    for (let pass = 0; pass < 3; pass++)
+      for (let i = N - 2; i >= 0; i--) pts[i].fade = Math.min(pts[i].fade, pts[i + 1].fade + 0.34);
+    // and it NARROWS as it fades. A half-transparent ribbon at full width is a slab; a ribbon
+    // that tapers is a river running out.
+    for (let i = 0; i < N; i++) pts[i].w *= 0.28 + 0.72 * pts[i].fade;
 
     paths.push(pts.map((q) => ({ x: q.x, z: q.z, w: q.w })));
     let arc = 0;
@@ -948,14 +964,27 @@ function buildRivers(map, cornerY, levels) {
       const slope = i > 0 ? (pv.y - p.y) / Math.max(0.05, Math.hypot(p.x - pv.x, p.z - pv.z)) : 0;
       const steep = Math.max(0, Math.min(1, (slope - 0.045) * 3.2));
       // lip height scales with the channel: a brook cuts a hand's depth, a trunk a real bank
-      const lipY = 0.165 + 0.66 * p.w;
+      // capped: a natural levee is knee-high whatever the estuary flare does to p.w
+      const lipY = Math.min(0.40, 0.165 + 0.66 * p.w);
       for (let c = 0; c < 7; c++) {
         const u = COL[c], au = Math.abs(u);
         // the damp shoulder is a fixed width in world units, not a multiple of the channel:
         // a brook needs as much bank blend as a trunk river or its edge reads as a cut
         const off = au > 2.0 ? Math.sign(u) * (p.w + 0.62)
                   : au > 1.2 ? Math.sign(u) * (p.w + 0.26) : u * p.w;
-        P.push(p.x - tz * off, p.y + (au > 1.2 && au < 2.0 ? lipY : LIFT[c]), p.z + tx * off);
+        const cx = p.x - tz * off, cz = p.z + tx * off;
+        let cyc = p.y + (au > 1.2 && au < 2.0 ? lipY : LIFT[c]);
+        // A LEVEE STANDS ON THE GROUND UNDER IT, not on the centreline's. Where the land falls
+        // away — which is every reach approaching a coast — the outboard columns kept the
+        // channel's own height and the whole 2 u skirt floated clear of the drop as a
+        // half-transparent apron: the mauve slab over the shallows and the stacked planes
+        // beside it. Clamped to the tile each column actually crosses, the toes bury
+        // themselves again and the terrain clips this cross-section the way it was designed to.
+        if (au > 0.5) {
+          const ac = worldToAxial(cx, cz), ct = map.get(ac.q, ac.r);
+          if (ct) cyc = Math.min(cyc, tileTopY(map, ct) + (au > 2.0 ? -0.30 : au > 1.2 ? lipY * 0.55 : 0.06));
+        }
+        P.push(cx, cyc, cz);
         U.push(u); V.push(arc); F.push(p.w); S.push(steep); D.push(p.fade); TG.push(tx, tz);
       }
     }
@@ -2102,8 +2131,16 @@ const RIVER_FRAG = /* glsl */`
 
     // Soft edges: the ribbon fades over ~8% of its own width instead of stopping on a hard
     // alpha cut, which is what leaves the stair-stepped silhouette an unfiltered decal shows.
-    float wAlpha = smoothstep(1.03, 0.88, au) * clamp(vFade, 0.0, 1.0);
-    float wa = bankMask * (1.0 - wAlpha) * clamp(vFade * 1.2, 0.0, 1.0);
+    // The feather was a fixed 0.15 of the channel's OWN half-width — 3 cm on a brook, i.e.
+    // well under a pixel anywhere but the front row, so every reach came back with the
+    // stair-stepped waterline of an unfiltered decal. Widen it to at least one and a half
+    // pixels of footprint, expressed in the same u units, and the bank is analytically AA'd
+    // at every depth.
+    float aaU = max(0.15, 1.5 * px / max(vW, 0.06));
+    float wAlpha = smoothstep(1.03, 1.03 - aaU, au) * clamp(vFade, 0.0, 1.0);
+    // no 1.2x overshoot on the bank: it kept the levee at full opacity through the whole
+    // stretch where the sheet itself was already fading out.
+    float wa = bankMask * (1.0 - wAlpha) * clamp(vFade, 0.0, 1.0);
     float a = clamp(wAlpha + wa, 0.0, 1.0);
     if (a < 0.004) discard;
     col = mix(col, foamCol, foam * wAlpha);

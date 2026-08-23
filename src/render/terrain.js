@@ -1333,7 +1333,10 @@ export class Terrain {
           // snowline jittered by ASPECT: the sun-facing flank melts out a good 30m higher than
           // the lee, which is what stops a snowline reading as a contour line on a map
           float aspect = dot( normalize( wn.xz + vec2( 1e-4 ) ), vec2( 0.86, 0.30 ) );
-          float snowH = smoothstep( uSnow.x, uSnow.y, vWP.y + ( nVar.b - 0.5 ) * 2.6 + ( nMac.b - 0.5 ) * 1.5 - aspect * 0.95 );
+          // ...but the jitter has to stay INSIDE the snowline band (uSnow spans ~1.6 u here).
+          // +-2.05 u of it detached the snow from the line entirely and stamped isolated white
+          // caps into mid-massif rock: the blown voids and the "hole" in the top-left massif.
+          float snowH = smoothstep( uSnow.x, uSnow.y, vWP.y + ( nVar.b - 0.5 ) * 0.95 + ( nMac.b - 0.5 ) * 0.55 - aspect * 0.45 );
           float wSnow = clamp( hblend( vMat.z * 0.95 + snowH * 1.1, warp ) * ( 1.0 - gslope * 1.3 ), 0.0, 1.0 );
           float wSand = clamp( hblend( smoothstep( 0.22, 0.86, vMat.y ) * 0.95 + smoothstep( 0.55, -0.05, vWP.y ) * 0.85, warp )
                           * ( 1.0 - wRock * 0.75 ), 0.0, 1.0 );
@@ -1499,7 +1502,7 @@ export class Terrain {
           strata = mix( 1.0, ( 0.62 + 0.62 * mix( 0.5, strata, sBed ) )
                            * ( 0.86 + 0.28 * mix( 0.5, fineBed, sFine ) )
                            * ( 0.82 + 0.36 * beds ),
-                        clamp( wall * 0.80 + smoothstep( 0.015, 0.20, gslope ), 0.0, 1.0 ) );
+                        clamp( wall * 0.80 + smoothstep( 0.20, 0.58, gslope ), 0.0, 1.0 ) );
           // Chroma cut ~22% off the phase-6 pair: the far massif measured a terracotta 0.44 on
           // a lit face where the bible's mountain band tops out far lower. Value spread keeps
           // the read; the hue family does not move.
@@ -1533,7 +1536,7 @@ export class Terrain {
           // A 3 px feature contributes ~1.0 to HF_rms and ~0.12 to MID_rms, so this is the one
           // band that keeps a far massif from mipping down to a painted plate without adding
           // any of the blur the metric reads as structureless.
-          rCol *= 1.0 + ( gFin - 0.5 ) * 0.86 * mix( 0.55, 1.0, dClose )
+          rCol *= 1.0 + ( gFin - 0.5 ) * 0.69 * mix( 0.55, 1.0, dClose )
                       + ( smoothstep( 0.16, 0.84, nMic.a ) - 0.5 ) * 0.06 * dNear;
           rCol = mix( rCol, rCol * vec3( 0.86, 1.06, 0.79 ), nMac.b * 0.30 * ( 1.0 - wall ) );   // lichen
           // talus: a gravel wash over the bottom third only, so it grounds the cut without
@@ -1629,8 +1632,8 @@ export class Terrain {
           // deliberately weighted to the BOUNCE (which is albedo-tinted) rather than to the sky
           // term, so lifting the shadow does not rotate its hue toward blue.
           reflectedLight.indirectDiffuse += material.diffuseColor
-            * ( skyC * ( 0.60 + 0.14 * wall - 0.12 * wRock ) * mix( 0.58 - 0.06 * wRock, 1.0, lit )
-              + bounce * ( 1.04 + 0.30 * wRock ) * mix( 0.44 + 0.30 * wRock, 1.0, lit ) );`);
+            * ( skyC * ( 0.60 + 0.14 * wall - 0.46 * wRock ) * mix( 0.58 - 0.06 * wRock, 1.0, lit )
+              + bounce * ( 1.04 + 0.98 * wRock ) * mix( 0.44 + 0.30 * wRock, 1.0, lit ) );`);
     };
     return m;
   }
@@ -1728,11 +1731,17 @@ export class Terrain {
         }
       }
 
-      // ---- summits: broad ridge masses, laid ALONG THE CONTOUR of the massif (perpendicular
-      //      to the local height gradient), so neighbouring summits chain into buttresses and a
-      //      crest line instead of a bed of nails. Only some tiles carry one; the rest are the
-      //      massif body, and letting the surface show through is what gives the range scale.
-      if (HIGH(t) && (!this._notTop(i) || hash2(t.q, t.r, 4441) < 0.52)) {
+      // ---- summits: one loft per HIGH tile, and IT HAS TO FIT INSIDE ITS OWN HEX.
+      //      This used to be a 1.56-2.40 radius stretched up to 1.58x on half the tiles, i.e. a
+      //      rock mass 2-4 hexes across sitting on every other summit. Two measured defects came
+      //      straight out of that footprint and nothing else: (1) the hex lattice is drawn on the
+      //      GROUND surface and depth-tests against whatever stands on it, so a loft that laps
+      //      over its neighbours' rims erases the grid across the entire massif — the standing
+      //      "no hex edges anywhere on the mountains" reject; (2) adjacent lofts interpenetrated,
+      //      which is the faceted self-intersecting shell read. One loft per tile at a footprint
+      //      inside the hex flat radius (0.866) keeps the same rock on the range — the tiles that
+      //      used to be bare now carry their own — and gives every hex a countable rim back.
+      if (HIGH(t)) {
         let gx = 0, gz = 0, nbSum = 0, nbN = 0;
         for (let d = 0; d < 6; d++) {
           const o = map.get(t.q + DIRS[d].q, t.r + DIRS[d].r);
@@ -1749,17 +1758,30 @@ export class Terrain {
         const alt = clamp01((this.surfY[i] - this.maxH * 0.42) / (this.maxH * 0.5));
         // 40m swell over the massif, so the skyline has shoulders and summits, not one plateau
         const swell = 0.55 + 1.05 * fbm2(p.x * 0.055, p.z * 0.055, { octaves: 2, seed: 4241 });
-        const rad = 1.56 + 0.84 * h1;
+        // Sized off the loft's VISIBLE footprint, not its base ring: the skirt is buried 0.45
+        // under the tile so the rock only breaks ground around rr < 0.65, i.e. ~0.6 of the
+        // instance scale. At 1.0-1.2 that lands the rock inside the 0.866 hex flat radius —
+        // the tile interior is covered (which is what hides the hex-plateau staircase under a
+        // massif) and the rim is clear (which is what lets the lattice be read on rock).
+        const rad = 0.86 + 0.18 * h1;
         // h2^3 makes the tall summits rare: most tiles are shoulders, a few are the hero peaks
-        const hgt = (1.18 + 3.05 * h2 * h2 * h2) * (0.50 + 0.95 * alt) * (0.55 + 0.80 * prom) * swell;
-        const stretch = 0.72 + 0.86 * h3 * h3;   // some summits pull out into a wall
+        // ...and the mass the old wide shells carried has to come back as HEIGHT, or a massif
+        // is just the surface mesh's hex-plateau staircase with pebbles on it. The loft is
+        // buried 0.45 + 0.10*hgt, so at the old numbers most of them broke ground by 30-80 cm
+        // and only the shared footprint made them read as rock at all.
+        // ...and the altitude/prominence floors have to be high enough that a massif SHOULDER
+        // still carries rock. At 0.50/0.55 a mid-range tile got two thirds of its loft taken
+        // away and the range came back as bare hex benches with scree on them.
+        const hgt = (2.90 + 6.00 * h2 * h2 * h2) * (0.68 + 0.80 * alt) * (0.70 + 0.62 * prom) * swell;
+        const stretch = 0.88 + 0.26 * h3 * h3;   // some summits pull out into a wall
         // slightly elongated along the contour, so a slope grows buttresses instead of pimples.
         // yaw is negated: a +Y rotation carries local +X to (cos, 0, -sin)
-        ridges.push(p.x + (h1 - 0.5) * 0.55, this.centreY[i] - 0.45 - 0.10 * hgt, p.z + (h3 - 0.5) * 0.55,
+        const ox = (h1 - 0.5) * 0.26, oz = (h3 - 0.5) * 0.26;   // stays clear of its own rim
+        ridges.push(p.x + ox, this.centreY[i] - 0.45 - 0.10 * hgt, p.z + oz,
           rad * stretch, hgt, rad / Math.sqrt(stretch) * 0.86,
           -theta + (h3 - 0.5) * 0.7, (h1 - 0.5) * 0.10, h2, i);
         this.cullR[i] = Math.max(this.cullR[i], 3.2 + hgt + rad * stretch);
-        this._stamp(p.x + (h1 - 0.5) * 0.55, p.z + (h3 - 0.5) * 0.55, rad * 0.95, 0.46, 0, 1.5);
+        this._stamp(p.x + ox, p.z + oz, rad * 0.95, 0.46, 0, 1.5);
       }
 
       // ---- boulders on hills and bare high ground
@@ -1842,17 +1864,6 @@ export class Terrain {
     if (this.ridgeMesh) this.group.add(this.ridgeMesh);
     if (this.rockMesh) this.group.add(this.rockMesh);
     this.rockMat = rockMat;
-  }
-
-  // True when some HIGH neighbour clearly overtops this tile: only the local maxima of the
-  // massif carry a summit loft, so the range reads as a crest line instead of a bed of nails.
-  _notTop(i) {
-    const t = this.map.tiles[i];
-    for (const d of DIRS) {
-      const o = this.map.get(t.q + d.q, t.r + d.r);
-      if (o && this.surfY[o.i] > this.surfY[i] + 0.50) return true;
-    }
-    return false;
   }
 
   // -------------------------------------------------------------- tile information
@@ -2265,7 +2276,12 @@ export class Terrain {
           // of wander and no more. The old phase carried 5 + 2.4 + 1.2 radians of noise, i.e.
           // more than a whole turn per bed, so the "strata" were a blob field in disguise.
           float rDip = vRWP.x * 0.62 + vRWP.z * 0.46 + rk1.b * 1.05;
-          float rTilt = smoothstep( 0.015, 0.20, 1.0 - abs( rwn.y ) );   // a bed on a level facet aliases
+          // BEDS BELONG ON CUT FACES. This gate was full by 11 degrees off level, so the whole
+          // gently-dipping shoulder of a massif got 0.62 u world-Y bands painted across it —
+          // and a horizontal band on a shallow slope is a CONTOUR LINE, one hex wide, which is
+          // exactly the terracing a critic measured instead of strata. Off under 27 deg, full
+          // past 55, where a bed is a bed.
+          float rTilt = smoothstep( 0.20, 0.58, 1.0 - abs( rwn.y ) );
           rBed *= rTilt; rLam *= rTilt;
           // A bedding plane is an EDGE. Sawtooth the phase and smoothstep it and each bed gets
           // a crisp top and a graded base — the read a sinusoid cannot give at any amplitude.
@@ -2295,17 +2311,22 @@ export class Terrain {
           rock *= 1.0 - smoothstep( 0.18, 0.02, rk2.a ) * 0.24;           // slab joints
           rock *= mix( 1.0, 0.955 + 0.09 * smoothstep( 0.24, 0.76, rk3.a ), rNear );  // 10 px grain
           rock *= 1.0 - smoothstep( 0.30, 0.07, rk3.a ) * 0.13 * mix( 0.5, 1.0, rNear );  // joints, 10 px
-          rock *= 1.0 - smoothstep( 0.24, 0.03, rk4.a ) * 0.42 * mix( 0.5, 1.0, rFin );   // hairlines, 3.4 px
+          rock *= 1.0 - smoothstep( 0.24, 0.03, rk4.a ) * 0.36 * mix( 0.5, 1.0, rFin );   // hairlines, 3.4 px
           rock *= mix( 1.0, 0.932 + 0.136 * rk3.a, rNear );               // cavity AO
           // 3.4 px grit, LOD'd by the mip chain and by nothing else. Every band above this one
           // lands in MID; this is the only one that lands in HF, so it is what keeps a distant
           // flank from mipping down to a painted plate.
-          rock *= 0.812 + 0.376 * smoothstep( 0.26, 0.74, rk4.a );
+          rock *= 0.878 + 0.244 * smoothstep( 0.26, 0.74, rk4.a );
 
           // snow: needs altitude, a face that is not sheer, and it favours the lee side.
           // Wind noise strips it off the exposed crest, so it never reads as a white wash.
           float lee = 0.78 + 0.22 * clamp( -dot( normalize( rN.xz + vec2( 1e-4 ) ), vec2( 0.80, 0.60 ) ), -1.0, 1.0 );
-          float alt = smoothstep( uSnow.x, uSnow.y, vRWP.y + ( rk1.b - 0.5 ) * 2.2 );
+          // JITTER MUST BE SMALLER THAN THE BAND IT JITTERS. uSnow spans maxH*0.80..1.02,
+          // about 1.5 u; a +-1.1 u wobble on the threshold is two thirds of that, so snow
+          // detached from the snowline and printed isolated white caps down the middle of bare
+          // rock — the "blown white voids / hole punched through the massif" read. 0.45 keeps
+          // the snowline broken without letting it teleport.
+          float alt = smoothstep( uSnow.x, uSnow.y, vRWP.y + ( rk1.b - 0.5 ) * 0.90 );
           float lie = smoothstep( 0.12, 0.58, clamp( rN.y, 0.0, 1.0 ) );      // sheer faces shed it
           float strip = smoothstep( 0.22, 0.74, rk2.b * 0.55 + rk1.a * 0.45 );// wind off the crest
           // a summit wears a cap, not a coat: snow needs altitude AND to be up the mesh, so
@@ -2315,12 +2336,15 @@ export class Terrain {
           snowAmt = smoothstep( 0.08, 0.66, snowAmt );
           // snow is never one flat white: it takes the sky in its hollows and a wind crust on
           // the drifts, and the arete rock cuts straight through it
-          vec3 snowC = mix( vec3( 0.54, 0.62, 0.82 ), vec3( 0.87, 0.885, 0.93 ), rk2.a * 0.6 + rk3.a * 0.4 );
+          // 0.93 albedo x a warm key x the 0.22 snow specular clipped to paper white and took
+          // the whole summit with it. The bible's snow band tops out at value 0.92 DISPLAY,
+          // which is this much albedo before the light, not after it.
+          vec3 snowC = mix( vec3( 0.52, 0.600, 0.790 ), vec3( 0.845, 0.860, 0.900 ), rk2.a * 0.6 + rk3.a * 0.4 );
           snowC *= ( 0.94 + 0.11 * rk1.b ) * mix( 1.0, 0.935 + 0.13 * rk4.a, rFin );   // crust, 3.4 px
           // snow replaces the instance tint instead of being multiplied by it, or a dark
           // boulder ends up with grey snow on top
           rock = mix( vec3( dot( rock, vec3( 0.2126, 0.7152, 0.0722 ) ) ), rock, 1.20 );
-          diffuseColor.rgb = mix( diffuseColor.rgb * rock * 2.85, snowC, snowAmt );
+          diffuseColor.rgb = mix( diffuseColor.rgb * rock * 3.35, snowC, snowAmt );
           float rspec = ( 0.055 + 0.22 * snowAmt ) * ( 0.45 + 1.1 * rk4.a );  // sparkle, not gloss`)
         .replace('#include <normal_fragment_maps>', 'normal = normalize( mat3( viewMatrix ) * rN );')
         .replace('#include <specularmap_fragment>', 'float specularStrength = rspec;')
@@ -2328,8 +2352,8 @@ export class Terrain {
           vec3 rdd = reflectedLight.directDiffuse / max( material.diffuseColor, vec3( 1e-4 ) );
           float rlit = clamp( max( rdd.r, max( rdd.g, rdd.b ) ) * 0.80, 0.0, 1.0 );
           reflectedLight.indirectDiffuse += material.diffuseColor
-            * ( vec3( 0.176, 0.174, 0.172 ) * mix( 1.16, 1.0, rlit )
-              + material.diffuseColor * vec3( 1.26, 1.10, 0.88 ) * 0.96 * mix( 1.06, 1.0, rlit ) );`);
+            * ( vec3( 0.088, 0.0875, 0.087 ) * mix( 1.16, 1.0, rlit )
+              + material.diffuseColor * vec3( 1.26, 1.10, 0.88 ) * 1.62 * mix( 1.06, 1.0, rlit ) );`);
     };
     return m;
   }
