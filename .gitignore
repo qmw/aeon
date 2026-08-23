@@ -1,4 +1,6 @@
 node_modules
+dist
 shots/*.png
 !shots/final-*.png
 !shots/converged.png
+!shots/p7-state.png

@@ -73,13 +73,19 @@ const hemi = new THREE.HemisphereLight(0x9ec9ff, 0x2a2318, 1.0);
 sun.target.position.copy(focus); sun.target.updateMatrixWorld();
 scene.add(sun, sun.target, hemi);
 
-// Optional modules: each agent's file is picked up as soon as it exists.
-const opt = async (path) => { try { return await import(/* @vite-ignore */ path); } catch (e) { console.warn('[opt] skip', path, e.message); return null; } };
-const [mTerrain, mWater, mSky, mPost, mUnits, mFx, mHud, mGame, mAi, mInput] = await Promise.all([
-  opt('./render/terrain.js'), opt('./render/water.js'), opt('./render/sky.js'), opt('./render/post.js'),
-  opt('./render/units.js'), opt('./render/fx.js'), opt('./ui/hud.js'), opt('./game/turn.js'),
-  opt('./game/ai.js'), opt('./game/input.js'),
-]);
+// Every module now exists, so these are static imports: a bundler cannot see through
+// import(variable), and the @vite-ignore dynamic version silently shipped a production build
+// with none of the render modules in it. Kept in one place so the wiring below is unchanged.
+import * as mTerrain from './render/terrain.js';
+import * as mWater from './render/water.js';
+import * as mSky from './render/sky.js';
+import * as mPost from './render/post.js';
+import * as mUnits from './render/units.js';
+import * as mFx from './render/fx.js';
+import * as mHud from './ui/hud.js';
+import * as mGame from './game/turn.js';
+import * as mAi from './game/ai.js';
+import * as mInput from './game/input.js';
 
 let terrain = null;
 if (mTerrain?.Terrain) { terrain = new mTerrain.Terrain(map, { renderer, scene, camera }); scene.add(terrain.group); }
