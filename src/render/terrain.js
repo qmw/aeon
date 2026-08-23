@@ -1234,7 +1234,7 @@ export class Terrain {
           float sFine = smoothstep( 2.0, 4.5, 0.2100 / mppY );   // 0.21 u laminae
           float detail = smoothstep( 2.2, 5.0, 0.3330 / mpp );   // nMes, uNoise 4.0 u tile / 12
           float dNear  = smoothstep( 3.0, 6.5, 0.1438 / mpp );   // nMic, uDet   4.6 u tile / 32
-          float dClose = smoothstep( 2.0, 4.4, 0.0547 / mpp );   // nFin, uDet   1.75 u tile / 32
+          float dClose = smoothstep( 2.40, 3.60, 0.0547 / mpp );  // nFin, uDet   1.75 u tile / 32
           float up = abs( wn.y );
           float flatness = smoothstep( 0.30, 0.78, up );
           float wall = vInfo.y;
@@ -1335,7 +1335,14 @@ export class Terrain {
           float aspect = dot( normalize( wn.xz + vec2( 1e-4 ) ), vec2( 0.86, 0.30 ) );
           float snowH = smoothstep( uSnow.x, uSnow.y, vWP.y + ( nVar.b - 0.5 ) * 2.6 + ( nMac.b - 0.5 ) * 1.5 - aspect * 0.95 );
           float wSnow = clamp( hblend( vMat.z * 0.95 + snowH * 1.1, warp ) * ( 1.0 - gslope * 1.3 ), 0.0, 1.0 );
-          float wSand = clamp( hblend( smoothstep( 0.22, 0.86, vMat.y ) * 0.95 + smoothstep( 0.55, -0.05, vWP.y ) * 0.85, warp )
+          // SAND FOLLOWS THE DRY SPLAT, NOT THE CONTOUR LINE. The second term used to be a
+          // bare smoothstep on world Y, so EVERY tile under y=0.55 came out as beach whatever
+          // it was — which is the whole of "plains and desert have collapsed to the same
+          // colour": a quarter of the board was painted with the one sand albedo and the
+          // biome's own base tint never reached the screen. Gate it on the tile's vegetation
+          // so it still runs the shore fringe up over bare coast and leaves green land green.
+          float shoreSand = smoothstep( 0.55, -0.05, vWP.y ) * 0.85 * ( 1.0 - smoothstep( 0.10, 0.55, vMat.x ) );
+          float wSand = clamp( hblend( smoothstep( 0.22, 0.86, vMat.y ) * 0.95 + shoreSand, warp )
                           * ( 1.0 - wRock * 0.75 ), 0.0, 1.0 );
           // Wet sand runs a good 1.2 m inland of the waterline, and it is the term that seats
           // the beach against the sea instead of letting white sand meet blue water on a line.
@@ -1366,7 +1373,7 @@ export class Terrain {
           dClose *= mix( 0.34, 1.0, smoothstep( 0.18, 0.70, wIso ) );
           vec2 grad = sharp2( nMac.rg, 0.14 )
                     + sharp2( nMes.rg, 0.60 ) * detail
-                    + sharp2( nMic.rg, 3.40 ) * dNear
+                    + sharp2( nMic.rg, 2.40 ) * dNear
                     + sharp2( nFin.rg, 2.10 ) * dClose;
           grad *= 1.0 - wSand * 0.10;
           // ROCK drops the blob bands and KEEPS the fine one. nMic's octaves land at 7-18
@@ -1374,7 +1381,7 @@ export class Terrain {
           // on a cut face they are the field of soft round bubble-wrap the whole massif was
           // wearing — 8-25 px energy with nothing at 3 px under it, i.e. MID/HF 1.6.
           grad -= ( sharp2( nMes.rg, 0.60 ) * detail * 0.55
-                  + sharp2( nMic.rg, 3.40 ) * dNear * 0.94
+                  + sharp2( nMic.rg, 2.40 ) * dNear * 0.94
                   + sharp2( nFin.rg, 2.10 ) * dClose * 0.10 ) * wRock;
           // NO BLADE COMB. Pushing the cell band along vec2(cos(lean), sin(lean)) looks like a
           // good idea and is a vortex generator: a direction field built from a scalar that way
@@ -1430,13 +1437,13 @@ export class Terrain {
           vec3 gCol = vBase * v32;
           gCol *= 0.910 + 0.180 * gMac;                                 // +-9%
           gCol *= 0.876 + 0.248 * gMes;                                 // +-12.4%
-          gCol *= 0.866 + 0.268 * gMeso;                                // +-13%    <- MACRO ALBEDO
+          gCol *= 0.902 + 0.196 * gMeso;                                // +-9.8%   <- MACRO ALBEDO
           // The two finest bands are worth ~17% each, not 35%. The gate is now full across the
           // whole near field, and 35% on a 6 px band, SQUARED by the gamma-2 lift at the end of
           // this shader, is a field of blown white specks — cottage cheese, not sward. Detail
           // energy belongs on the 18-50 px bands above, where a player reads material.
-          gCol *= mix( 1.0, 1.0 + ( gMic - 0.5 ) * 0.38 * gGate, dNear );
-          gCol *= 1.0 + ( gFin - 0.5 ) * 0.62 * dClose * gGate;
+          gCol *= mix( 1.0, 1.0 + ( gMic - 0.5 ) * 0.07 * gGate, dNear );
+          gCol *= 1.0 + ( gFin - 0.5 ) * 0.32 * dClose * gGate;
           // The macro band's job is HUE, not value: blue-green swale to yellow-green rise,
           // about 7 degrees apart at matched luminance. Half the old swing — 1.050/0.916 across
           // R and B was a 14% chroma push, and against warm sand that is the acid-green read.
@@ -1452,7 +1459,7 @@ export class Terrain {
           gCol = mix( gCol, gCol * vec3( 0.84, 0.79, 0.70 ), smoothstep( 0.34, 0.06, sharp( nMic.a, 1.5 ) ) * 0.20 * dNear );
           // clumping: the 24 px band gates WHERE the blades bunch, so the sward has stands and
           // thin patches instead of one even carpet of noise
-          gCol *= mix( 1.0, 0.90 + 0.20 * gMic, gMeso * dNear * 0.9 );
+          gCol *= mix( 1.0, 0.94 + 0.12 * gMic, gMeso * dNear * 0.9 );
 
           // ==================================================================== SAND
           // Warm 38-degree family. Every bit of structure is ripple and grain; nothing here
@@ -1469,12 +1476,17 @@ export class Terrain {
           sCol *= 0.905 + 0.180 * nMes.b;                                             // 480-48 px drift
           // DUNE RIDGES, in the albedo and at a size a player can see: the 24 px cell field
           // shaped into crests and slacks. This is the macro layer the material had none of.
-          sCol *= 0.866 + 0.258 * smoothstep( 0.20, 0.78, nMes.a );                   // 290-24 px
+          sCol *= 0.914 + 0.162 * smoothstep( 0.20, 0.78, nMes.a );                   // 290-24 px
           // grain, not a crack network: blending the cellular A channel halfway into the smooth
           // B one is what stops the near sand reading as dried mud instead of sand.
           float sGrain = smoothstep( 0.12, 0.88, nMic.a );                            // 330-10 px (MID)
-          sCol *= mix( 1.0, 1.0 + ( sGrain - 0.5 ) * 0.42 * gGate, dNear );
-          sCol *= 1.0 + ( gFin - 0.5 ) * 0.36 * dClose * gGate;
+          sCol *= mix( 1.0, 1.0 + ( sGrain - 0.5 ) * 0.20 * gGate, dNear );
+          // With the blotch bands cut, the finest resolvable band is what carries HF — and it
+          // is the only one that is properly LOD'd, so near sand gets grain and far sand does
+          // not. That IS the near/far ramp the gate measures.
+          sCol *= 1.0 + ( gFin - 0.5 ) * 0.62 * dClose * gGate;
+          sCol *= 1.0 - smoothstep( 0.24, 0.04, sharp( nFin.a, 2.6 ) ) * 0.46 * dClose;   // grit, 3 px
+          sCol = mix( vec3( dot( sCol, vec3( 0.2126, 0.7152, 0.0722 ) ) ), sCol, 0.93 );
           // grit: darker grains of the SAME hue, gated into fields by the macro mask, so a
           // beach is never leopard print
           float gvl = smoothstep( 0.36, 0.74, nMes.a * 0.6 + nVar.b * 0.4 ) * dNear;
@@ -1506,7 +1518,7 @@ export class Terrain {
           // MOUNTAIN, not desert. The bible locks rock on #7A7368 at sat 0.08-0.18, val
           // 0.32-0.62; this pair used to BE the desert albedo and a lit face measured #c6a67c,
           // sat 0.37 val 0.78 — twice the chroma ceiling and the rock sharing the sand's tint.
-          rCol = mix( vec3( 0.322, 0.270, 0.196 ), vec3( 0.612, 0.502, 0.356 ),
+          rCol = mix( vec3( 0.316, 0.264, 0.194 ), vec3( 0.578, 0.480, 0.346 ),
                       clamp( 0.24 + 0.26 * nMac.b + 0.30 * nMes.b + 0.14 * nMic.b * dNear + 0.10 * nVar.b, 0.0, 1.0 ) );
           // Mineral staining, block to block: iron-warm on one, grey-cool on the next, on the
           // 78-1080 px band. Chroma BETWEEN blocks rather than chroma in the base is how rock
@@ -1522,7 +1534,8 @@ export class Terrain {
           rCol *= 1.0 - frac * ( 0.38 + 0.30 * wall ) * mix( 0.55, 1.0, dClose );
           float cav = smoothstep( 0.58, 0.18, 0.55 * nMes.a + 0.45 * sharp( nMic.a, 1.6 ) );
           rCol *= 1.0 - cav * 0.13 * ( 0.45 + 0.55 * detail );
-          rCol *= 0.968 + 0.062 * smoothstep( 0.22, 0.80, nMes.a );                   // block scatter, 20 px
+          rCol *= 0.942 + 0.116 * smoothstep( 0.22, 0.80, nMes.a );                   // block scatter, 20 px
+          rCol = mix( vec3( dot( rCol, vec3( 0.2126, 0.7152, 0.0722 ) ) ), rCol, 1.14 );
           // SLABS, 65 px. Between the 20 px grain and the 220 px massif shapes the rock had
           // nothing at all, which is why every face read as one uniform plate with static on
           // it. A 65 px feature contributes 0.15 to MID_rms and 0.01 to HF, so this is shape
@@ -1533,7 +1546,7 @@ export class Terrain {
           // A 3 px feature contributes ~1.0 to HF_rms and ~0.12 to MID_rms, so this is the one
           // band that keeps a far massif from mipping down to a painted plate without adding
           // any of the blur the metric reads as structureless.
-          rCol *= 1.0 + ( gFin - 0.5 ) * 0.86 * mix( 0.55, 1.0, dClose )
+          rCol *= 1.0 + ( gFin - 0.5 ) * 0.94 * mix( 0.55, 1.0, dClose )
                       + ( smoothstep( 0.16, 0.84, nMic.a ) - 0.5 ) * 0.06 * dNear;
           rCol = mix( rCol, rCol * vec3( 0.86, 1.06, 0.79 ), nMac.b * 0.30 * ( 1.0 - wall ) );   // lichen
           // talus: a gravel wash over the bottom third only, so it grounds the cut without
@@ -1563,7 +1576,12 @@ export class Terrain {
           // soil sheets, the pale rise on a dune field. This is the band MID_rms is a band-pass
           // ON, it costs nothing in HF, and without it the material's whole budget sits on
           // grain and measures as noise-beats-structure however much grain there is.
-          col *= 1.0 + ( smoothstep( 0.20, 0.80, nMac.b * 0.55 + nMac.a * 0.45 ) - 0.5 ) * 0.268 * ( 1.0 - wRock * 0.55 );
+          // AMPLITUDE, measured. This band, the 290-24 px one above it and the base tint ramp
+          // all multiply and the product is then SQUARED by the gamma-2 lift, so 0.268 here
+          // lands as a 60% luminance swing on screen — cream blotches on chocolate, i.e. the
+          // lichen-camouflage read, and MID/HF 1.40 in the near field. 0.17 is the ~0.12
+          // luminance the ground actually wants.
+          col *= 1.0 + ( smoothstep( 0.20, 0.80, nMac.b * 0.55 + nMac.a * 0.45 ) - 0.5 ) * 0.170 * ( 1.0 - wRock * 0.55 );
 
           // wet sand and riparian mud darken and warm rather than going grey
           col *= mix( vec3( 1.0 ), vec3( 0.700, 0.628, 0.522 ), wet * ( 1.0 - wSnow ) );
@@ -1629,8 +1647,8 @@ export class Terrain {
           // deliberately weighted to the BOUNCE (which is albedo-tinted) rather than to the sky
           // term, so lifting the shadow does not rotate its hue toward blue.
           reflectedLight.indirectDiffuse += material.diffuseColor
-            * ( skyC * ( 0.60 + 0.14 * wall - 0.12 * wRock ) * mix( 0.58 - 0.06 * wRock, 1.0, lit )
-              + bounce * ( 1.04 + 0.30 * wRock ) * mix( 0.44 + 0.30 * wRock, 1.0, lit ) );`);
+            * ( skyC * ( 0.60 + 0.14 * wall - 0.26 * wRock ) * mix( 0.58 - 0.06 * wRock, 1.0, lit )
+              + bounce * ( 1.04 + 0.54 * wRock ) * mix( 0.44 + 0.30 * wRock, 1.0, lit ) );`);
     };
     return m;
   }
@@ -2129,7 +2147,9 @@ export class Terrain {
           vec4 lf = texture2D( uDet, vTWP.xz * 0.36 + vec2( vTWP.y * 0.25, vTWP.y * -0.16 ) );
           vec4 lm = texture2D( uNoise, vTWP.xz * 0.31 + vec2( vTWP.y * -0.22, vTWP.y * 0.14 ) + vec2( 0.27, 0.63 ) );
           vec4 lc = texture2D( uNoise, vTWP.xz * 0.055 + vec2( 0.4, 0.7 ) );
-          diffuseColor.rgb *= vec3( 0.80 + 0.40 * lf.a ) * ( 0.86 + 0.30 * lm.a )
+          vec3 tdx = dFdx( vTWP ), tdy = dFdy( vTWP );
+          float tFin = smoothstep( 4.2, 7.0, 0.0868 / ( max( length( tdx ), length( tdy ) ) + 1e-6 ) );
+          diffuseColor.rgb *= mix( vec3( 1.0 ), vec3( 0.80 + 0.40 * lf.a ), tFin ) * ( 0.90 + 0.22 * lm.a )
             * mix( vec3( 1.05, 1.00, 0.86 ), vec3( 0.80, 1.00, 0.90 ), lf.b )
             * ( 0.82 + 0.36 * lc.b ) * 0.50;
           diffuseColor.rgb = mix( vec3( dot( diffuseColor.rgb, vec3( 0.32, 0.56, 0.12 ) ) ) * vec3( 1.04, 1.0, 0.88 ),
@@ -2281,9 +2301,9 @@ export class Terrain {
           // MOUNTAIN, not desert. The bible locks rock on #7A7368 at sat 0.08-0.18 and
           // val 0.32-0.62; this pair used to be the DESERT albedo and a lit flank measured
           // #c6a67c, sat 0.373 val 0.776 — twice the chroma ceiling, sharing the sand's tint.
-          vec3 rock = mix( vec3( 0.214, 0.178, 0.132 ), vec3( 0.590, 0.486, 0.346 ),
+          vec3 rock = mix( vec3( 0.212, 0.174, 0.128 ), vec3( 0.566, 0.464, 0.330 ),
                            rk1.b * 0.40 + rk2.b * 0.44 + rk4.b * 0.16 );
-          rock *= 0.68 + 0.62 * band;                          // strata
+          rock *= 0.62 + 0.74 * band;                          // strata
           // Mineral staining block to block: iron-warm on one bed, grey-cool on the next.
           // Chroma BETWEEN blocks, not chroma in the base, is how rock reads grey and still
           // carries a saturation signal.
@@ -2293,14 +2313,18 @@ export class Terrain {
           rock *= 0.944 + 0.112 * smoothstep( 0.22, 0.80, rk2.a );        // 30 px block scatter
           rock *= 0.948 + 0.104 * smoothstep( 0.24, 0.76, rk1.a );        // 145 px slabs
           rock *= 1.0 - smoothstep( 0.18, 0.02, rk2.a ) * 0.24;           // slab joints
-          rock *= mix( 1.0, 0.955 + 0.09 * smoothstep( 0.24, 0.76, rk3.a ), rNear );  // 10 px grain
+          rock *= mix( 1.0, 0.936 + 0.128 * smoothstep( 0.24, 0.76, rk3.a ), rNear );  // 10 px grain
           rock *= 1.0 - smoothstep( 0.30, 0.07, rk3.a ) * 0.13 * mix( 0.5, 1.0, rNear );  // joints, 10 px
-          rock *= 1.0 - smoothstep( 0.24, 0.03, rk4.a ) * 0.42 * mix( 0.5, 1.0, rFin );   // hairlines, 3.4 px
+          rock *= 1.0 - smoothstep( 0.24, 0.03, rk4.a ) * 0.32 * mix( 0.5, 1.0, rFin );   // hairlines, 3.4 px
           rock *= mix( 1.0, 0.932 + 0.136 * rk3.a, rNear );               // cavity AO
           // 3.4 px grit, LOD'd by the mip chain and by nothing else. Every band above this one
           // lands in MID; this is the only one that lands in HF, so it is what keeps a distant
           // flank from mipping down to a painted plate.
-          rock *= 0.812 + 0.376 * smoothstep( 0.26, 0.74, rk4.a );
+          // CELLS, not cauliflower. A pale 3.4 px Voronoi cell with a dark rim around it, at
+          // +-19% over the whole massif, is not grain — it is popcorn, and it was both the
+          // "blurry blobs" read on the far flank and the reason far HF sat within 1.4x of the
+          // near field. Half the amplitude leaves grit and lets the strata below carry the face.
+          rock *= 0.884 + 0.232 * smoothstep( 0.26, 0.74, rk4.a );
 
           // snow: needs altitude, a face that is not sheer, and it favours the lee side.
           // Wind noise strips it off the exposed crest, so it never reads as a white wash.
@@ -2319,7 +2343,7 @@ export class Terrain {
           snowC *= ( 0.94 + 0.11 * rk1.b ) * mix( 1.0, 0.935 + 0.13 * rk4.a, rFin );   // crust, 3.4 px
           // snow replaces the instance tint instead of being multiplied by it, or a dark
           // boulder ends up with grey snow on top
-          rock = mix( vec3( dot( rock, vec3( 0.2126, 0.7152, 0.0722 ) ) ), rock, 1.20 );
+          rock = mix( vec3( dot( rock, vec3( 0.2126, 0.7152, 0.0722 ) ) ), rock, 1.44 );
           diffuseColor.rgb = mix( diffuseColor.rgb * rock * 2.85, snowC, snowAmt );
           float rspec = ( 0.055 + 0.22 * snowAmt ) * ( 0.45 + 1.1 * rk4.a );  // sparkle, not gloss`)
         .replace('#include <normal_fragment_maps>', 'normal = normalize( mat3( viewMatrix ) * rN );')
@@ -2328,8 +2352,8 @@ export class Terrain {
           vec3 rdd = reflectedLight.directDiffuse / max( material.diffuseColor, vec3( 1e-4 ) );
           float rlit = clamp( max( rdd.r, max( rdd.g, rdd.b ) ) * 0.80, 0.0, 1.0 );
           reflectedLight.indirectDiffuse += material.diffuseColor
-            * ( vec3( 0.176, 0.174, 0.172 ) * mix( 1.16, 1.0, rlit )
-              + material.diffuseColor * vec3( 1.26, 1.10, 0.88 ) * 0.96 * mix( 1.06, 1.0, rlit ) );`);
+            * ( vec3( 0.118, 0.114, 0.106 ) * mix( 1.16, 1.0, rlit )
+              + material.diffuseColor * vec3( 1.30, 1.11, 0.84 ) * 1.22 * mix( 1.06, 1.0, rlit ) );`);
     };
     return m;
   }
@@ -2394,7 +2418,7 @@ export class Terrain {
     for (const k of order) {
       if (w >= CLUTTER) break;
       const d = near[k], i = near[k + 1], px = near[k + 2], pz = near[k + 3];
-      const fade = 1 - smoothstep01(CLUT_R * 0.66, CLUT_R, d);
+      const fade = 1 - smoothstep01(CLUT_R * 0.36, CLUT_R * 0.62, d);
       if (fade < 0.06) continue;
       const veg = mat[i * 4], dry = mat[i * 4 + 1], snow = mat[i * 4 + 2];
       // How sandy this ground is, independent of how DRY it is: plains are dry and still
@@ -2495,7 +2519,12 @@ export class Terrain {
         // ...and its occlusion pool. Lifted 3.5 cm so the disc clears the ground triangle on
         // a slope; that is 1 px on screen and invisible, and it is the whole reason these
         // things sit ON the ground instead of hovering over a painted floor.
-        if (dw < DMAX && fade > 0.30 && kind !== 2 && sz > 0.26) {
+        // EVERY instance, not a size-and-kind lottery. `kind !== 2 && sz > 0.26` gave pebbles
+        // no decal at all and, since sz = h4*h4, denied one to roughly half of everything else —
+        // which is exactly the measured "two identical rocks on one tile, contact deltas +38 and
+        // +5 luma". The pool is already sized one slot per instance, so the gate bought nothing
+        // but the inconsistency. A small prop gets a small pool; never no pool.
+        if (dw < DMAX && fade > 0.22) {
           pos.y = y + 0.035;
           scl.set(foot * (0.85 + 0.55 * sz), 1, foot * (0.85 + 0.55 * sz));
           e.set(0, h2 * 6.283, 0); q.setFromEuler(e);
