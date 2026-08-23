@@ -306,7 +306,12 @@ void main(){
   #else
     float psz = 1.0;
   #endif
-  mv.xyz += n * min(psz * 0.075, -mv.z * uPx / 1680.0);
+  // The psz term is the one that bites at gameplay zoom: the screen-space push only wins up
+  // close, so at 30 units the whole cast was wearing a 1.2 px contour it could not be read by.
+  // 0.115 of the part's own size lands a torso at ~2 px and a bracer under 1 — Civ's contour,
+  // thickest on the masses that carry the silhouette — and changes nothing at portrait range,
+  // where uPx still clamps it.
+  mv.xyz += n * min(psz * 0.115, -mv.z * uPx / 1680.0);
   gl_Position = projectionMatrix * mv;
 }`,
     fragmentShader: 'void main(){ gl_FragColor = vec4(0.055, 0.049, 0.044, 1.0); }',
@@ -1208,10 +1213,15 @@ const doorway = (x, y, z, w, h, jamb = C.stoneL, d = 0.05) => [
 // of bare dirt under a prop reads as a decal blob however dark it is — the review's phrase, on
 // the farms and again on the quarry. Both skirts get an irregular outline and the outer one is
 // barely proud of the ground, so what the eye gets is trodden earth spilling out from a base.
+// TRODDEN EARTH, AND IT HAS TO STAY EARTH THROUGH THE GRADE. Authored at sat 0.43 these
+// skirts arrived on screen (tools/_u4px.mjs) at sat 0.24 — a neutral warm grey — and a
+// neutral grey disc ringed by saturated grass reads MAUVE, which is the "purple slab under
+// the wonder prop" the review boxed at Calyx. Dirt is chromatic: carry the extra chroma in
+// the albedo so what survives the ambient and the tone curve is still brown.
 const apron = (r, y = 0.010) => [
-  tag(wobble(taper(G.cyl.clone(), 0.55, -0.5, 0.5), 0.075, ((r * 1000) | 0) + 3), 0x483b29, M_SOIL,
+  tag(wobble(taper(G.cyl.clone(), 0.55, -0.5, 0.5), 0.075, ((r * 1000) | 0) + 3), 0x51381e, M_SOIL,
     xf(0, y + 0.018, 0, r * 1.80, 0.150, r * 1.80)),
-  tag(wobble(taper(G.cyl.clone(), 0.40, -0.5, 0.5), 0.105, ((r * 1700) | 0) + 11), 0x54462f, M_SOIL,
+  tag(wobble(taper(G.cyl.clone(), 0.40, -0.5, 0.5), 0.105, ((r * 1700) | 0) + 11), 0x5e4326, M_SOIL,
     xf(0, y - 0.014, 0, r * 2.20, 0.100, r * 2.20)),
 ];
 // a shuttered window: reveal + sill + a lit pane set back, never a flat emissive sticker
@@ -2221,11 +2231,18 @@ class Decals {
 // the name is ellipsised to fit it, so every plate in the game is one shape; _plateFade then
 // pins that shape to a fixed fraction of a hex on screen whatever the camera is doing.
 const PL = { W: 512, H: 176, X: 46, Y: 10, BW: 420, BH: 112, HEX: 1.25 };
-function plateTexture(name, pop, prod, team) {
+// `k` is the RESOLUTION MATCH. The plate is authored in one fixed 512x176 coordinate system
+// and then drawn onto a canvas k times that size, so the texture can be rebuilt at whatever
+// the sprite actually covers on screen. Shipped at k=1 the bar was 420 canvas texels shown
+// across ~170 screen pixels: a 2.5x minification, i.e. every label in the game was being read
+// out of mip 1.3 with the transparent surround bleeding into its edges. That is the "blurry
+// world-space quad" — nothing to do with TAA. _plateFade re-solves k as the camera moves.
+function plateTexture(name, pop, prod, team, k = 1) {
   const { W, H, X: x0, Y: y0, BW: w, BH: h } = PL;
   const cv = document.createElement('canvas');
-  cv.width = W; cv.height = H;
+  cv.width = Math.round(W * k); cv.height = Math.round(H * k);
   const g = cv.getContext('2d');
+  g.scale(k, k);
   const r = 13;
   const round = (x, y, ww, hh, rr) => {
     g.beginPath(); g.moveTo(x + rr, y);
@@ -2236,7 +2253,10 @@ function plateTexture(name, pop, prod, team) {
   // outline the plate dissolves into a red roof or a lit field the moment it crosses one.
   g.shadowColor = 'rgba(0,0,0,0.45)'; g.shadowBlur = 10; g.shadowOffsetY = 7;
   const body = g.createLinearGradient(0, y0, 0, y0 + h);
-  body.addColorStop(0, 'rgba(32,36,45,0.95)'); body.addColorStop(1, 'rgba(13,16,21,0.95)');
+  // OPAQUE. At 0.95 the lit hillside behind the label came through the bar as olive and tan
+  // blotches — five per cent of a very bright ground is still a mottle on something this dark,
+  // and a label you can see the map through is not UI, it is a decal.
+  body.addColorStop(0, 'rgba(30,34,43,1)'); body.addColorStop(1, 'rgba(12,15,20,1)');
   g.fillStyle = body; round(x0, y0, w, h, r); g.fill();
   g.shadowColor = 'transparent';
   // team chip with the population
@@ -2285,7 +2305,7 @@ function plateTexture(name, pop, prod, team) {
   g.beginPath(); g.moveTo(W / 2 - 3, by); g.lineTo(W / 2 - 3, by + 24); g.stroke();
   const t = new THREE.CanvasTexture(cv);
   t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
-  t.frac = w / W;
+  t.frac = w / W; t.k = k;
   return t;
 }
 
@@ -3252,7 +3272,11 @@ export class Units {
         // mass on the figure — bigger than the helmet, brighter than the shield boss — and the
         // eye lands on a shirt instead of on a soldier. Cloth, leather and skin top out below
         // the polished-metal ceiling, so the hierarchy is bronze > cloth > wool > boots.
-        const cap = met ? 0.84 : lo ? 0.26 : 0.60;
+        // 0.84 was above the brief's accent (0.65) and a raked steel blade lit by the key
+        // landed on screen as a near-white 40 px streak beside every warrior — a blown
+        // highlight the eye reads as an artefact, not as a sword. 0.70 keeps polished metal
+        // the top of the value ladder (cloth caps at 0.60) without clipping.
+        const cap = met ? 0.70 : lo ? 0.26 : 0.60;
         _c.setHSL(_hsl.h, _hsl.s, THREE.MathUtils.clamp(l, 0.05, cap), THREE.SRGBColorSpace);
         pr.mesh.setColorAt(s, _c);
         // roughness rides the same lot: a scuffed helmet and a polished one in the same file
@@ -3498,6 +3522,20 @@ export class Units {
       c.pfade = c.pfade === undefined ? want : c.pfade + (want - c.pfade) * Math.min(1, dt / 0.12);
       sp.material.opacity = c.pfade;
       sp.visible = c.pfade > 0.02;
+      // ---- RESOLUTION MATCH. `hw` is already the real half-width of the BAR in device
+      // pixels, so hw*2/frac is what one canvas width covers on screen. Redraw the label at
+      // that size when it drifts more than a quarter off, and the text is sampled at 1:1
+      // instead of out of a mip. Log hysteresis, so a slow zoom cannot thrash the canvas.
+      if (sp.visible && hw > 8) {
+        const kw = THREE.MathUtils.clamp((hw * 2 / frac) * (window.devicePixelRatio || 1) / PL.W, 0.25, 1.6);
+        const cur = sp.material.map?.k ?? 1;
+        if (Math.abs(Math.log(kw / cur)) > 0.22) {
+          const old = sp.material.map;
+          sp.material.map = plateTexture(c.name, c.pop, c.prod, c.team, kw);
+          sp.material.needsUpdate = true;
+          old?.dispose();
+        }
+      }
     }
   }
 
@@ -3575,7 +3613,10 @@ export class Units {
         const cam = this.camera;
         const b = cam ? Math.atan2(cam.position.x - tp.x, cam.position.z - tp.z) : 0;
         const a = b + (n > 1 ? (u.si / (n - 1) - 0.5) * 1.10 : (u.seed % 3 - 1) * 0.26);
-        tx += Math.sin(a) * 0.60; tz += Math.cos(a) * 0.60;
+        // 0.60 of a 0.866 inradius still left him among the barns; 0.80 puts him at the kerb,
+        // in front of everything on the tile, and it is the last radius that stays inside the
+        // hex on every heading so the grid stroke is never straddled.
+        tx += Math.sin(a) * 0.80; tz += Math.cos(a) * 0.80;
       } else if (n > 1) {
         const a = (u.si / n) * Math.PI * 2 + (u.q + u.r) * 0.9;
         tx += Math.cos(a) * 0.42; tz += Math.sin(a) * 0.42;
