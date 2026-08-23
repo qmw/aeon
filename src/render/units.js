@@ -3126,6 +3126,16 @@ export class Units {
       entry.mesh.instanceMatrix.needsUpdate = true;
       if (entry.mesh.instanceColor) entry.mesh.instanceColor.needsUpdate = true;
     }
+    // footprint index for _clearSpot: x, z, radius, one entry per placed building
+    const bp = this._bpos = [];
+    for (const [type, list] of this.builds) {
+      const d = this.bdim.get(type);
+      if (!d || NO_CAST.has(type.split(':')[0])) continue;
+      for (const b of list) {
+        const p = b.p; if (!p) continue;
+        bp.push(p[0] + d.cx * p[3], p[2] + d.cz * p[5], Math.max(d.rx * p[3], d.rz * p[5]) * 0.95);
+      }
+    }
     this._buildRoads();
   }
 
@@ -3193,6 +3203,37 @@ export class Units {
     this.roadMesh = new THREE.Mesh(g, this.roadMat);
     this.roadMesh.renderOrder = 2; this.roadMesh.receiveShadow = true; this.roadMesh.frustumCulled = false;
     this.group.add(this.roadMesh);
+  }
+
+  // THE FIGURE OWNS ITS TILE, part two. Stepping to the camera side of the hex is only half
+  // the answer: on a district the camera side is as likely to hold a barn as bare dirt, and
+  // the review's verdict on the shipped frame was "interpenetrating mesh soup". Sample five
+  // stations across the camera-facing arc and stand on whichever one is furthest from any
+  // building footprint, with a small bias back toward the lens so a soldier does not walk
+  // round the back of the town to find a gap. `_bpos` is rebuilt whenever the town is.
+  // Returns [bearing, radius]: a dense district can leave no gap at all on the ring the
+  // caller asked for, so the kerb (0.92, just inside the hex corner) is tried as well.
+  _clearSpot(cx, cz, bearing, rad) {
+    const bp = this._bpos;
+    if (!bp || !bp.length) return [bearing, rad];
+    let bestA = bearing, bestR = rad, bestS = -1e9;
+    for (const r of (rad < 0.9 ? [rad, 0.92] : [rad])) {
+      for (let k = -3; k <= 3; k++) {
+        const a = bearing + k * 0.36;
+        const x = cx + Math.sin(a) * r, z = cz + Math.cos(a) * r;
+        let m = 4;
+        for (let i = 0; i < bp.length; i += 3) {
+          const dx = x - bp[i], dz = z - bp[i + 1];
+          if (dx > 2 || dx < -2 || dz > 2 || dz < -2) continue;
+          const g = Math.hypot(dx, dz) - bp[i + 2];
+          if (g < m) m = g;
+        }
+        // clear ground wins; ties go to the station facing the lens on the tighter ring
+        const s = Math.min(m, 0.55) - Math.abs(k) * 0.045 - (r - rad) * 0.30;
+        if (s > bestS) { bestS = s; bestA = a; bestR = r; }
+      }
+    }
+    return [bestA, bestR];
   }
 
   // ------------------------------------------------------------ instance slots
@@ -3263,7 +3304,8 @@ export class Units {
         // the accent, the legs and boots own the floor, everything else is the mass — and the
         // head gets half a band of lift on top so the silhouette always has a light top.
         const lo = p.b === 5 || p.b === 6;
-        const cen = (met ? 0.615 : lo ? 0.11 : 0.375) + (p.b === 2 && !met ? 0.075 : 0) + gnd * 0.20;
+        const cen = (met ? (p.b === 2 ? 0.680 : 0.545) : lo ? 0.11 : 0.375)
+          + (p.b === 2 && !met ? 0.075 : 0) + gnd * 0.20;
         // Metal gets a NARROW band, not a big one: it is already the brightest thing in the
         // frame once the spec lobe is on it, and stretching pale steel the same way as wool put
         // a blown-white pickaxe head in the middle of the board.
@@ -3300,7 +3342,7 @@ export class Units {
     // degrees restores the vertical without making him look drunk at portrait range.
     if (this.camera) {
       _v.set(0, 0, -1).applyQuaternion(this.camera.quaternion);
-      this._lean = THREE.MathUtils.clamp(Math.asin(THREE.MathUtils.clamp(-_v.y, -1, 1)) - 0.66, 0, 0.44);
+      this._lean = THREE.MathUtils.clamp(Math.asin(THREE.MathUtils.clamp(-_v.y, -1, 1)) - 0.56, 0, 0.44);   // capped: past 25 deg the head leaves the tile the feet are on
       // pixels per world unit at unit distance — the silhouette budget in _step divides by depth
       this._pxk = (window.innerHeight * 0.5) / Math.tan(this.camera.fov * Math.PI / 360);
     } else { this._lean = 0; this._pxk = 0; }
@@ -3587,7 +3629,8 @@ export class Units {
         const b = cam ? Math.atan2(cam.position.x - tp.x, cam.position.z - tp.z) : 0;
         const a = b + (n > 1 ? (u.si / (n - 1) - 0.5) * 1.25 : (u.seed % 3 - 1) * 0.30);
         const rr = this._footAt.get(u.q * 4096 + u.r) ?? 0.8;
-        tx += Math.sin(a) * rr; tz += Math.cos(a) * rr;
+        const [a2, rr2] = this._clearSpot(tp.x, tp.z, a, rr);
+        tx += Math.sin(a2) * rr2; tz += Math.cos(a2) * rr2;
       } else if (this._builtAt.has(u.q * 4096 + u.r)) {
         // THE FIGURE OWNS ITS TILE. A soldier parked on a market district stands inside four
         // stalls, two awnings and a crate stack, and the review's "nine competing shapes in
@@ -3595,8 +3638,9 @@ export class Units {
         // front of the props rather than among them; a stack fans along that arc.
         const cam = this.camera;
         const b = cam ? Math.atan2(cam.position.x - tp.x, cam.position.z - tp.z) : 0;
-        const a = b + (n > 1 ? (u.si / (n - 1) - 0.5) * 1.10 : (u.seed % 3 - 1) * 0.26);
-        tx += Math.sin(a) * 0.60; tz += Math.cos(a) * 0.60;
+        const [a, rr] = this._clearSpot(tp.x, tp.z,
+          b + (n > 1 ? (u.si / (n - 1) - 0.5) * 1.10 : (u.seed % 3 - 1) * 0.26), 0.74);
+        tx += Math.sin(a) * rr; tz += Math.cos(a) * rr;
       } else if (n > 1) {
         const a = (u.si / n) * Math.PI * 2 + (u.q + u.r) * 0.9;
         tx += Math.cos(a) * 0.42; tz += Math.sin(a) * 0.42;
@@ -3653,7 +3697,13 @@ export class Units {
     // the local slope: a plane fit through four samples across its footprint. Without this a
     // cart on a 15-degree beach puts one wheel in the air and the other in the sand, which is
     // exactly the tell that makes a unit read as pasted on rather than standing there.
-    _v2.set(u.water ? 0 : u.nx || 0, 2 * fp, u.water ? 0 : u.nz || 0).normalize();
+    // A PERSON DOES NOT LIE DOWN ON A HILL. Full plane-conform is right for a cart and a hull
+    // and wrong for a man: measured (tools/_utilt.mjs) it put the whole garrison 20-30 degrees
+    // off vertical, and 30 degrees under a 55-degree camera is a figure projecting as its own
+    // plan view — the "unnameable smear" of every review. Legs take up the slope; the body
+    // stays near upright and only hints at it.
+    const cf = (d.wheels || d.boat) ? 1 : 0.30;
+    _v2.set(u.water ? 0 : (u.nx || 0) * cf, 2 * fp, u.water ? 0 : (u.nz || 0) * cf).normalize();
     _q.setFromUnitVectors(UP, _v2);
     _q.multiply(_q2.setFromEuler(_e.set(roll * 0.6, u.yaw, roll)));
     u.gN = _v2.y;
@@ -3745,8 +3795,14 @@ export class Units {
     // exists at portrait range, where the same test lets it back in.
     const parts = d.parts;
     const cam = this.camera;
+    // ...but NEVER past the naming set. Unbounded, this cull is what the review measured as
+    // "the fortified token is a blank cone": past ~70 units every part of an archer fails the
+    // six-pixel test except his hooded cloak, so the unit degrades to one smooth cone with no
+    // head, no bow and no legs. 0.105 is just under the smallest part that carries the read
+    // (helm dome 0.145, torso 0.216, shield 0.21, boots 0.148), so the furniture still goes and
+    // the silhouette never does.
     const cut = (cam && this._pxk)
-      ? 6.0 * Math.hypot(cam.position.x - u.x, cam.position.y - u.y, cam.position.z - u.z) / (this._pxk * usc)
+      ? Math.min(0.105, 6.0 * Math.hypot(cam.position.x - u.x, cam.position.y - u.y, cam.position.z - u.z) / (this._pxk * usc))
       : 0;
     for (let i = 0; i < parts.length; i++) {
       const p = parts[i];
@@ -3831,7 +3887,7 @@ export class Units {
   // src/ui/hud.js owns the DOM and is not this agent's file, so this is offered rather than
   // installed. One line adopts it:
   //     el.innerHTML = `<img class="bust" src="${window.units.portrait('warrior', civColor)}">`;
-  portrait(type, color = 0x4fa8ff, px = 192) {
+  portrait(type, color = 0x4fa8ff, px = 256) {
     const R = window.renderer;
     if (!R) return null;
     const cache = this._ports || (this._ports = new Map());
@@ -3855,9 +3911,10 @@ export class Units {
     const out = new THREE.Mesh(geo, this.outMat); out.renderOrder = -1; sc.add(out);
     // three-point rig, 5600K key / 7000K bounce / 5600K rim
     const L = (hex, i, x, y, z) => { const d = new THREE.DirectionalLight(hex, i); d.position.set(x, y, z); sc.add(d); };
-    L(0xffe3ba, 3.6, -0.95, 1.40, 1.95);      // key, on the camera side so it lights the FACE
-    L(0x9db8dc, 0.85, 1.70, -0.15, 0.85);     // cool bounce off the shade side
-    L(0xfff0d6, 2.7, 1.25, 0.95, -1.60);      // rim, behind the sun shoulder
+    L(0xffe3ba, 4.4, -0.95, 1.40, 1.95);      // key, on the camera side so it lights the FACE
+    L(0x9db8dc, 1.35, 1.70, -0.15, 0.85);     // cool bounce off the shade side
+    L(0xfff0d6, 3.0, 1.25, 0.95, -1.60);      // rim, behind the sun shoulder
+    sc.add(new THREE.HemisphereLight(0xcfd9e6, 0x6b5a3e, 0.85));   // the alcove itself
 
     // FRAME THE BUST OFF THE RIG, not off a hand-tuned constant. The head BONE is where the
     // face is for every unit in the roster; a hand-solved distance framed the warrior with his
@@ -3867,12 +3924,16 @@ export class Units {
     geo.computeBoundingBox();
     const bb = geo.boundingBox;
     const hy = (def.piv?.[2]?.[1] ?? h * 0.78) + h * 0.02;
-    const span = h * (def.mounted ? 0.86 : def.boat || def.wheels ? 1.15 : 0.70);
+    const span = h * (def.mounted ? 0.86 : def.boat || def.wheels ? 1.15 : 0.72);
     const d = span / (2 * Math.tan(13 * Math.PI / 180));
     const cam = new THREE.PerspectiveCamera(26, 1, 0.05, 40);
+    // CENTRE ON THE MAN, NOT ON HIS BOUNDING BOX. Every foot unit is authored on x = 0 and
+    // every one of them carries a weapon out to one side, so the box centre is wherever the
+    // spear happens to point — which framed the warrior hard against the right edge of his own
+    // plate with two thirds of the picture given over to empty air behind a sword.
     const aim = new THREE.Vector3(
-      THREE.MathUtils.clamp((bb.min.x + bb.max.x) * 0.5, -h * 0.09, h * 0.09),
-      def.boat || def.wheels ? (bb.min.y + bb.max.y) * 0.5 : hy - h * 0.07, 0);
+      def.boat || def.wheels ? THREE.MathUtils.clamp((bb.min.x + bb.max.x) * 0.5, -h * 0.09, h * 0.09) : 0,
+      def.boat || def.wheels ? (bb.min.y + bb.max.y) * 0.5 : hy - h * 0.085, 0);
     cam.position.set(aim.x + d * 0.40, aim.y + d * 0.03, aim.z + d * 0.916);
     cam.lookAt(aim);
 
@@ -3906,7 +3967,7 @@ export class Units {
     fig.getContext('2d').putImageData(im, 0, 0);
     g.drawImage(fig, 0, 0);
     const vg = g.createRadialGradient(px * 0.48, px * 0.40, px * 0.22, px * 0.48, px * 0.40, px * 0.80);
-    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.70)');
+    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.58)');
     g.fillStyle = vg; g.fillRect(0, 0, px, px);
     // a warm floor bounce along the bottom edge: the plate reads as a lit alcove rather than a
     // cut-out on a swatch, which is the whole difference between a portrait and an avatar
@@ -3929,7 +3990,7 @@ export class Units {
     if (!el) return;
     const key = want.type + ':' + want.color;
     if (el.dataset.aeon === key && el.firstElementChild?.tagName === 'IMG') return;
-    const url = this.portrait(want.type, want.color, 192);
+    const url = this.portrait(want.type, want.color, 256);
     if (!url) return;
     el.dataset.aeon = key;
     el.innerHTML = '<img class="bust" alt="" src="' + url + '">';
