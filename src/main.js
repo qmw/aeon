@@ -213,6 +213,15 @@ Object.assign(window, { THREE, scene, camera, renderer, map, terrain, water, sky
 addEventListener('aeon:zoom', e => { if (input) input.zoomT = Math.max(0, Math.min(1, input.zoomT - e.detail * 0.10)); });
 
 const sunDir = new THREE.Vector3();
+// aeon-debug-flags: ?nopost=1 renders the raw scene, ?time=0.35 forces a sun angle.
+// Debug switches for the screenshot harness — a broken frame is much faster to bisect with them.
+const Q = new URLSearchParams(location.search);
+if (Q.has('time')) sky?.setTimeOfDay(+Q.get('time'));
+const usePost = post && !Q.has('nopost');
+// post.js takes ownership of the tonemap and switches the renderer's off; without post there is
+// no tonemap at all, which made raw debug shots read far darker than the pipeline they diagnose.
+if (!usePost) { renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0; }
+
 let last = performance.now(), acc = 0, frames = 0;
 renderer.setAnimationLoop(() => {
   // FIXED TIMESTEP, not a wall-clock one. Every module animates on dt — waving flags, the water
@@ -235,7 +244,7 @@ renderer.setAnimationLoop(() => {
   // one sun vector for everyone: sky's if it loaded, otherwise the light's own position
   water?.update?.(dt, camera, sky?.sunDir ?? sunDir.copy(sun.position).normalize());
   units?.update?.(dt); fx?.update?.(dt); input?.update?.(dt); game?.update?.(dt); hud?.update?.(game?.state);
-  if (post) post.render(dt); else renderer.render(scene, camera);
+  if (usePost) post.render(dt); else renderer.render(scene, camera);
 });
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();

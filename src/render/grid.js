@@ -61,6 +61,18 @@ const EDGE_LIFT = 0.04;
 // unit hex corners, flat-top, CCW from +x — local (x, z) on the IDEAL hexagon
 const C = [];
 for (let k = 0; k < 6; k++) C.push([Math.cos(k * Math.PI / 3), Math.sin(k * Math.PI / 3)]);
+// ...and the rings are SAMPLED along that hexagon, not chorded corner to corner. Six points
+// makes every hex edge one straight 1.0 u chord in 3D: on a plateau rim or a mountain flank the
+// ground falls away under the middle of that chord and the stroke rasterises as a straight bar
+// hanging clear of the surface — the stray grey rods lying across the massif. Two samples per
+// edge halve the chord and the line lies on the relief instead of spanning it. Every sample is
+// ON the ideal hexagon, so `d` in the shader is unchanged and the stroke is still one line.
+const RIM = [];
+for (let k = 0; k < 6; k++) for (let sub = 0; sub < 2; sub++) {
+  const a = C[k], b = C[(k + 1) % 6], t = sub / 2;
+  RIM.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+}
+const NR = RIM.length;
 // the shader derives an edge index from the fragment angle; this maps it back to a DIRS index
 const EDGE_DIR = [0, 5, 4, 3, 2, 1];
 
@@ -70,6 +82,7 @@ const VERT = /* glsl */`
 attribute vec2 aLocal;    // position on the IDEAL hex, corner radius = 1
 attribute vec2 aTile;     // uv into the state texture
 attribute float aFade;    // baked per-tile legibility; negative marks a water tile
+attribute float aBias;    // EXTRA depth bias, for tiles with rock standing on them (see below)
 uniform sampler2D uState;
 uniform float uFar, uBias;
 varying vec2 vL; varying vec4 vS; varying vec3 vP; varying vec2 vT;
@@ -93,7 +106,7 @@ void main() {
   float grazeK = smoothstep(0.05, 0.22, toCam.y / dist);
   vFade = min(abs(aFade), min(distK, grazeK));
   vec4 mv = viewMatrix * wp;
-  mv.xyz -= normalize(mv.xyz) * uBias;   // pure depth bias along the eye ray: zero screen motion
+  mv.xyz -= normalize(mv.xyz) * (uBias + aBias);   // pure depth bias along the eye ray: zero screen motion
   gl_Position = projectionMatrix * mv;
 }`;
 
@@ -300,7 +313,12 @@ void main() {
     // floor of 26 / 20 / 6.3 — i.e. in the far band the stroke was sitting ON its own noise
     // floor. Three things were taking it: the moire cutoff above (1.5x), post.js's far-field
     // mip (2.5x, now masked off) and the multiplier itself, which is 0.335 rather than 0.42.
-    vec3 seamK = vec3(0.335, 0.360, 0.435);
+    // WARM-NEUTRAL, NOT NAVY. The old triple put blue 30% above red, which on bright grass and
+    // sand reads as a neutral dark line — and on the massif, where the ground under it is a dark
+    // warm rock, leaves a residue that is almost pure blue. Measured: the surviving strokes over
+    // the mountains came back navy. Same luminance (0.360), warm side of neutral, so the line is
+    // ink on the ground everywhere instead of ink on grass and a blue wire on rock.
+    vec3 seamK = vec3(0.400, 0.355, 0.310);
     MUL(seamK, (1.0 - smoothstep(1.00, 2.00, dp)) * g * mix(1.16, 0.94, lit))
   }
   // ALPHA IS NOT OPACITY HERE — it is the DECAL PROTECT MASK, and it is the other half of
@@ -542,23 +560,33 @@ export class Grid {
       // clearance over terrain.js's fbm relief, which is damped to ~0.2*amp at the rim
       const lift = 0.04 + relief * 0.02 + (rough ? 0.05 : 0);
 
+      // THE ROCK STANDS ON THE TILE THE LATTICE IS ENGRAVED INTO. terrain.js scatters its summit
+      // lofts and scree over a mountain hex rim to rim, and they are real geometry with real
+      // depth: measured (tools/_bgrid3.mjs) 53% of every visible mountain rim is occluded by
+      // them, median depth gap 1.14 u, p75 1.35. The 0.11 view-space bias below is sized to be
+      // beaten by anything a player can see standing on a hex — correct on grass, hopeless
+      // against a boulder field — so the massif came back with a broken stipple where its grid
+      // should be, which is standing reject #1 and a whole biome the player cannot count.
+      // A rough tile gets a bias sized to the props that stand on it instead.
+      const bias = rough ? 1.25 : 0;
+
       const key = ((t.q / CH_Q) | 0) * 64 + ((t.r / CH_R) | 0);
       let ch = chunks.get(key);
-      if (!ch) chunks.set(key, ch = { pos: [], loc: [], uv: [], fd: [], idx: [] });
+      if (!ch) chunks.set(key, ch = { pos: [], loc: [], uv: [], fd: [], bs: [], idx: [] });
       const b = ch.pos.length / 3;
       const uvx = (t.q + 0.5) / map.w, uvy = (t.r + 0.5) / map.h, fsign = water ? -fade : fade;
-      const put = (x, y, z, lx, lz) => { ch.pos.push(x, y, z); ch.loc.push(lx, lz); ch.uv.push(uvx, uvy); ch.fd.push(fsign); };
+      const put = (x, y, z, lx, lz) => { ch.pos.push(x, y, z); ch.loc.push(lx, lz); ch.uv.push(uvx, uvy); ch.fd.push(fsign); ch.bs.push(bias); };
 
       put(p.x, this.surfY(p.x, p.z) + lift, p.z, 0, 0);
-      for (const R of RINGS) for (let k = 0; k < 6; k++) {
-        const wx = p.x + C[k][0] * R, wz = p.z + C[k][1] * R;
-        put(wx, this.surfY(wx, wz) + (R === 1 ? EDGE_LIFT : lift), wz, C[k][0] * R, C[k][1] * R);
+      for (const R of RINGS) for (let k = 0; k < NR; k++) {
+        const wx = p.x + RIM[k][0] * R, wz = p.z + RIM[k][1] * R;
+        put(wx, this.surfY(wx, wz) + (R === 1 ? EDGE_LIFT : lift), wz, RIM[k][0] * R, RIM[k][1] * R);
       }
-      for (let k = 0; k < 6; k++) {
-        const k2 = (k + 1) % 6;
+      for (let k = 0; k < NR; k++) {
+        const k2 = (k + 1) % NR;
         ch.idx.push(b, b + 1 + k, b + 1 + k2);
         for (let r = 0; r + 1 < RINGS.length; r++) {
-          const a0 = b + 1 + r * 6, a1 = a0 + 6;
+          const a0 = b + 1 + r * NR, a1 = a0 + NR;
           ch.idx.push(a0 + k, a1 + k, a1 + k2, a0 + k, a1 + k2, a0 + k2);
         }
       }
@@ -570,6 +598,7 @@ export class Grid {
       g.setAttribute('aLocal', new THREE.BufferAttribute(new Float32Array(ch.loc), 2));
       g.setAttribute('aTile', new THREE.BufferAttribute(new Float32Array(ch.uv), 2));
       g.setAttribute('aFade', new THREE.BufferAttribute(new Float32Array(ch.fd), 1));
+      g.setAttribute('aBias', new THREE.BufferAttribute(new Float32Array(ch.bs), 1));
       g.setIndex(new THREE.BufferAttribute(new Uint16Array(ch.idx), 1));
       g.computeBoundingSphere();
       const m = new THREE.Mesh(g, this.mat); m.renderOrder = 12;

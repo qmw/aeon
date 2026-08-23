@@ -1,0 +1,32 @@
+import { chromium } from 'playwright';
+import { writeFileSync } from 'node:fs';
+const EXE='/home/piotr/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome';
+const b=await chromium.launch({executablePath:EXE,args:['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--no-sandbox','--disable-dev-shm-usage']});
+const p=await b.newPage({viewport:{width:1200,height:675}});
+p.on('pageerror',e=>console.log('ERR',String(e).slice(0,200)));
+await p.goto('http://localhost:5173/',{waitUntil:'load',timeout:60000});
+await p.waitForFunction(()=>(window.__frameCount||0)>=14,null,{timeout:400000}).catch(()=>{});
+const wait=(n=10)=>p.evaluate(k=>new Promise(r=>{const s=window.__frameCount;const t=setInterval(()=>{if(window.__frameCount>s+k){clearInterval(t);r();}},80);}),n);
+await p.evaluate(()=>{document.querySelectorAll('#hud,.hud,#ui').forEach(e=>e.style.display='none');});
+const A=await p.screenshot({type:'png'});
+await p.evaluate(()=>{window.scene.traverse(o=>{if(o.isDirectionalLight)o.castShadow=false;});});
+await wait(); const B=await p.screenshot({type:'png'});
+const out=await p.evaluate(async ([a,bb])=>{
+  const load=x=>new Promise(r=>{const i=new Image();i.onload=()=>r(i);i.src='data:image/png;base64,'+x;});
+  const ia=await load(a),ib=await load(bb);
+  const c=document.createElement('canvas');c.width=ia.width;c.height=ia.height;
+  const g=c.getContext('2d',{willReadFrequently:true});
+  g.drawImage(ia,0,0);const da=g.getImageData(0,0,c.width,c.height);
+  g.clearRect(0,0,c.width,c.height);g.drawImage(ib,0,0);const db=g.getImageData(0,0,c.width,c.height).data;
+  const o=da.data; let n=0,s=0,hist={};
+  for(let i=0;i<o.length;i+=4){const la=0.2126*o[i]+0.7152*o[i+1]+0.0722*o[i+2];
+    const lb=0.2126*db[i]+0.7152*db[i+1]+0.0722*db[i+2];const dlt=lb-la;
+    if(dlt>6)n++; s+=dlt;
+    const k=Math.min(9,Math.floor(dlt/10)); if(dlt>0)hist[k]=(hist[k]||0)+1;
+    const v=Math.max(0,Math.min(255,dlt*3));o[i]=v;o[i+1]=v;o[i+2]=v;o[i+3]=255;}
+  g.putImageData(da,0,0);
+  return {px:o.length/4, shadowedPct:+(100*n/(o.length/4)).toFixed(2), meanDelta:+(s/(o.length/4)).toFixed(2), hist, url:c.toDataURL('image/png')};
+},[A.toString('base64'),B.toString('base64')]);
+writeFileSync('/home/piotr/looping_opus_5_test/shots/_lshadmask.png',Buffer.from(out.url.split(',')[1],'base64'));
+delete out.url; console.log(JSON.stringify(out));
+await b.close();

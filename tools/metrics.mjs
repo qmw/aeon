@@ -25,7 +25,7 @@ const out = await p.evaluate(async ({ url, regions }) => {
     { x: 640, y: 430, w: 200, h: 140, name: 'center' }, { x: 200, y: 700, w: 240, h: 160, name: 'near-left' },
   ];
   for (const R of defs) {
-    let hf = 0, mid = 0, n = 0, L = 0, S = 0;
+    let hf = 0, mid = 0, n = 0, L = 0, S = 0, hx = 0, hy = 0, hn = 0;
     for (let y = R.y; y < R.y + R.h; y++) for (let x = R.x; x < R.x + R.w; x++) {
       if (x < 1 || y < 1 || x >= c.width - 1 || y >= c.height - 1) continue;
       const i = y * c.width + x, l = lum[i];
@@ -33,9 +33,15 @@ const out = await p.evaluate(async ({ url, regions }) => {
       mid += Math.pow(box(2, x, y, c.width, c.height) - box(8, x, y, c.width, c.height), 2);
       const o = i * 4, mx = Math.max(full[o], full[o + 1], full[o + 2]), mn = Math.min(full[o], full[o + 1], full[o + 2]);
       S += mx ? (mx - mn) / mx : 0; L += l; n++;
+      // circular mean hue: a violet ambient on warm ground shows up here and nowhere else
+      if (mx - mn > 8) { const r0 = full[o] / 255, g0 = full[o + 1] / 255, b0 = full[o + 2] / 255;
+        const M = Math.max(r0, g0, b0), m0 = Math.min(r0, g0, b0), d = M - m0;
+        let hdeg = M === r0 ? 60 * (((g0 - b0) / d) % 6) : M === g0 ? 60 * ((b0 - r0) / d + 2) : 60 * ((r0 - g0) / d + 4);
+        if (hdeg < 0) hdeg += 360; hx += Math.cos(hdeg * Math.PI / 180); hy += Math.sin(hdeg * Math.PI / 180); hn++; }
     }
     const HF = Math.sqrt(hf / n), MID = Math.sqrt(mid / n);
-    stats.push({ name: R.name, mean: +(L / n).toFixed(1), sat: +(S / n).toFixed(3), HF_rms: +HF.toFixed(2), MID_rms: +MID.toFixed(2), MID_over_HF: +(MID / (HF || 1e-6)).toFixed(2) });
+    let hue = hn ? Math.atan2(hy / hn, hx / hn) * 180 / Math.PI : -1; if (hue < 0 && hn) hue += 360;
+    stats.push({ name: R.name, mean: +(L / n).toFixed(1), sat: +(S / n).toFixed(3), hue: +hue.toFixed(1), HF_rms: +HF.toFixed(2), MID_rms: +MID.toFixed(2), MID_over_HF: +(MID / (HF || 1e-6)).toFixed(2) });
   }
   let crushed = 0, blown = 0;
   for (let i = 0; i < lum.length; i++) { if (lum[i] < 4) crushed++; if (lum[i] > 250) blown++; }
