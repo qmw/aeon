@@ -925,8 +925,12 @@ function buildRivers(map, cornerY, levels) {
     for (let i = 0; i < N; i++) {
       const s = i / Math.max(1, N - 1);
       const head = spring ? 0.42 + 0.58 * Math.pow(Math.min(1, i / Math.max(1, N * 0.34)), 0.60) : 1;
-      // estuary: the last stretch flares into a mouth instead of stopping on a blunt end
-      const flare = toSea ? 1 + 1.05 * Math.pow(Math.max(0, s - 0.80) / 0.20, 1.6) : 1;
+      // estuary: the last stretch flares into a mouth instead of stopping on a blunt end.
+      // 1.05 doubled the channel over its last hex, and since the bank strip is a FIXED 0.62 u
+      // either side the mouth came out as a 2.5 u slab of geometry laid across the beach — at 5x
+      // on the delivered frame, two hard-edged translucent tan bands with a rectangular quad
+      // step in them, either side of a pale ribbon. A mouth is wider, not twice as wide.
+      const flare = toSea ? 1 + 0.40 * Math.pow(Math.max(0, s - 0.80) / 0.20, 1.6) : 1;
       pts[i].w *= head * (0.80 + 0.20 * s) * flare;
       // The estuary flares AND THEN GOES TO ZERO. No ribbon may survive onto the sea plane: an
       // opaque fan of river water lying on open water, clipped by a straight edge where the
@@ -947,14 +951,22 @@ function buildRivers(map, cornerY, levels) {
       if (i > 0) arc += Math.hypot(p.x - pv.x, p.z - pv.z);
       const slope = i > 0 ? (pv.y - p.y) / Math.max(0.05, Math.hypot(p.x - pv.x, p.z - pv.z)) : 0;
       const steep = Math.max(0, Math.min(1, (slope - 0.045) * 3.2));
-      // lip height scales with the channel: a brook cuts a hand's depth, a trunk a real bank
-      const lipY = 0.165 + 0.66 * p.w;
+      // Lip height scales with the channel — a brook cuts a hand's depth, a trunk a real bank —
+      // but it is CAPPED, because p.w carries the estuary flare: uncapped, the mouth grew an
+      // 0.8 u levee, which is knee-high geometry standing over the beach it is supposed to be
+      // cut into. 0.40 is a bank you can read; past that it is a dyke.
+      const lipY = Math.min(0.165 + 0.66 * p.w, 0.40);
       for (let c = 0; c < 7; c++) {
         const u = COL[c], au = Math.abs(u);
         // the damp shoulder is a fixed width in world units, not a multiple of the channel:
         // a brook needs as much bank blend as a trunk river or its edge reads as a cut
-        const off = au > 2.0 ? Math.sign(u) * (p.w + 0.62)
-                  : au > 1.2 ? Math.sign(u) * (p.w + 0.26) : u * p.w;
+        // 0.62 is a 34-screen-pixel shoulder either side of a channel that is often narrower
+        // than that, and it is drawn as a TRANSLUCENT SHEET over ground this file does not own —
+        // so at the mouth it came back as two hard-edged tan bands wider than the river, with the
+        // grass reading through them. Measured by hiding the river mesh: the slabs are this.
+        // A damp rim, not a berm: 0.30 u is ~16 px, which is a bank you read as an edge.
+        const off = au > 2.0 ? Math.sign(u) * (p.w + 0.30)
+                  : au > 1.2 ? Math.sign(u) * (p.w + 0.16) : u * p.w;
         P.push(p.x - tz * off, p.y + (au > 1.2 && au < 2.0 ? lipY : LIFT[c]), p.z + tx * off);
         U.push(u); V.push(arc); F.push(p.w); S.push(steep); D.push(p.fade); TG.push(tx, tz);
       }
@@ -1383,8 +1395,23 @@ const OCEAN_FRAG = /* glsl */`
     // ...and the same trick one octave up: the 5-20 screen-pixel slope band, alone. Two mips
     // of ONE world-space octave differenced — the content stays welded to the world and the
     // mip chain band-limits it, which is what 'mipped world-space material' means.
-    vec2 gMID = wave(p, 2.55, vec2( 0.643, 0.766), 0.036, 2.30).xy
-              - wave(p, 2.55, vec2( 0.643, 0.766), 0.036, 4.30).xy;
+    //
+    // AND IT IS SAMPLED ALONG THE CRESTS, 3:1. ATTRIBUTED, not reasoned about: tools/_w2attr.mjs
+    // drives one uK knob to zero per pass and dumps the same 4x crop of the shelf, and with
+    // uK0.w at 0 the "cornflake crumple" is simply GONE — the sea reads as long diagonal wave
+    // streaks with clean surf bands, while killing the chop, the octaves, the foam or the
+    // specular each leaves the cell field standing. An isotropic 5-20 px SLOPE field projected
+    // on the sun azimuth (see gB below) is by construction a mat of lit and shaded CELLS, and
+    // this band carries the biggest single gain in the shader.
+    // So it is not turned down — 5-20 px is the window the eye reads a sea in, and the band
+    // ratio the metric gates lives here — it is turned SIDEWAYS: the lookup runs in the swell's
+    // own frame with the along-crest axis compressed 3:1, so the identical energy lands as the
+    // long backs of swells instead of as chips. Across-crest frequency, mip chain and band
+    // amplitude are all untouched, which is why MID_rms does not move.
+    vec2 mw = vec2(0.643, 0.766);                    // this octave's heading; crests run perpendicular
+    vec2 mp = mw * dot(p, mw) + vec2(-mw.y, mw.x) * (dot(p, vec2(-mw.y, mw.x)) * 0.34);
+    vec2 gMID = wave(mp, 2.55, mw, 0.036, 2.30).xy
+              - wave(mp, 2.55, mw, 0.036, 4.30).xy;
     // THE BLOB BAND, explicitly, and it is a band-pass rather than a noise field: two mips of
     // ONE lookup differenced, which leaves the 10-35 px structure and nothing on either side
     // of it. The crest trains own the wave SHAPE; this is the broad brightness structure a sea
@@ -1393,9 +1420,25 @@ const OCEAN_FRAG = /* glsl */`
     // uK1.w debug tap: with the trains alone the sea delivered MID 9.3 against HF 23, i.e. it
     // was a pixel field with waves hidden inside it, and no amount of crest gain fixed that
     // because a sharpened crest feeds the pixel window too.
+    //
+    // AND IT IS SAMPLED ALONG THE CRESTS, 3:1. This band carries the sea's ENTIRE 5-16 px read
+    // — its gain lands on the column at up to +-0.6 — and sampled in a square frame it delivers
+    // that read as ISOTROPIC CELLS. That is the cornflake crumple three reviews have measured on
+    // this shelf, and it is NOT the foam: hiding every foam term leaves the same cell field in
+    // turquoise instead of white. A sea's mid-scale brightness structure is not cells, it is the
+    // long backs of the swells — dark smears lying ALONG the crest lines. So the lookup frame is
+    // the swell's own: x across the crests (unchanged, so the band, the mip chain and the metric
+    // all see exactly the energy they saw before) and y along them, compressed 3:1 so a feature
+    // runs three crest-lengths sideways. Same octave, same band, same amplitude; lines not chips.
+    //
+    // (This does NOT contradict the no-stretch rule in wave(). That rule is about the PIXEL band,
+    // where a directed grain reads as combing on the raster. At 5-16 px a directed smear reads as
+    // the weather it is.)
     vec2 bq = p + vec2(0.423, 0.906) * (uTime * 0.06);
-    float blob = texture2D(uNoise, bq * (1.0 / 3.00) + 0.21, 2.2).b
-               - texture2D(uNoise, bq * (1.0 / 3.00) + 0.21, 4.0).b;
+    vec2 bw = vec2(0.423, 0.906);                    // swell propagation; crests run perpendicular
+    vec2 bqa = vec2(dot(bq, bw), dot(bq, vec2(-bw.y, bw.x)) * 0.34);
+    float blob = texture2D(uNoise, bqa * (1.0 / 3.00) + 0.21, 2.2).b
+               - texture2D(uNoise, bqa * (1.0 / 3.00) + 0.21, 4.0).b;
     // soft-capped like the crest gain, for the same reason: a clipped blob band is a stencil
     blob = blob * K_BLOB; blob = blob / sqrt(1.0 + blob * blob / 0.3600);
 
@@ -1639,7 +1682,14 @@ const OCEAN_FRAG = /* glsl */`
               + sunSpec(N, V, H, rough, (0.230 * track + 0.008) * (0.35 + 0.90 * streak)
                         * (0.60 + 1.10 * smoothstep(0.30, 0.92, chop))
                         * mix(0.55, 1.0, f3)
-                        * smoothstep(0.02, 0.22, depth)
+                        // GLITTER NEEDS SOMEWHERE TO GO. This lobe is ADDITIVE, and over the
+                        // shoal it lands on a pixel that is already the sand bed's own light —
+                        // so it clips channel by channel and every sparkle comes back as a white
+                        // chip with no hue. Same tap as above: with uK1.x at 0 the shelf's white
+                        // speckle halves. Over the abyss the pixel is a dark blue with three
+                        // stops of room above it and the same lobe is the sun path a golden-hour
+                        // sea is famous for, so it keeps full strength there.
+                        * smoothstep(0.05, 0.75, depth)
                         * (1.0 - smoothstep(240.0, 420.0, dist)));
     spec = spec / (1.0 + spec * 0.42);                       // soft knee, hue preserved
     col += spec * uK1.x * vec3(1.16, 1.00, 0.78) * shadeSpec * mix(0.80, 1.0, vOpen);
@@ -1677,8 +1727,13 @@ const OCEAN_FRAG = /* glsl */`
     // it is BOTH dragging on the bottom AND close enough to the beach that its run-up has
     // somewhere to go. Keyed on depth alone the phase term traces whatever isoline the shelf
     // happens to have and paints it white, four hexes out in open water. Both gates, ANDed.
-    float breakZone = (1.0 - smoothstep(1.05, 2.30, depth))
-                    * (1.0 - smoothstep(2.2, 3.8, max(sdRaw, 0.0)));
+    // BOTH GATES PULLED IN. MEASURED on the delivered frame: at 1.05-2.30 of depth AND 3.8 u of
+    // standoff the zone covered most of a shelf, so the band set ran a hex and a half offshore
+    // and (with the 44% duty cycle below) came back as ONE UNBROKEN MAT of white lace from
+    // (1050,380) to (1250,540) at constant screen scale — the "cornflake crumple inshore" this
+    // file has now been rejected for three times. Surf lives in the last hex.
+    float breakZone = (1.0 - smoothstep(0.80, 1.85, depth))
+                    * (1.0 - smoothstep(1.8, 3.2, max(sdRaw, 0.0)));
 
     // (a) the contact line: always present, on every coast, rock and hull that pierces the sheet
     float contact = (1.0 - smoothstep(0.0, 0.16 + 0.16 * xp, sdC)) * calm;
@@ -1689,11 +1744,18 @@ const OCEAN_FRAG = /* glsl */`
     // parallel to the coast, so one periodic function of sd gives the whole refracted set at
     // once, marching inshore and curving round every headland for free.
     float ph = fract(sd * (1.0 / 1.25) - uTime * 0.30);
-    float band = smoothstep(0.02, 0.13, ph) * (1.0 - smoothstep(0.13, 0.46, ph));
-    col *= 1.0 + (band - 0.24) * 0.44 * breakZone * fetch * (0.60 + 0.60 * xp);
-    // decay slow enough that three crest lines stand off the beach at once, at 1.25 / 2.50 /
-    // 3.75 u out and 0.46 / 0.21 / 0.10 of full strength: a set of breakers building on a beach.
-    float surf = band * exp(-max(sd, 0.0) * 0.76) * breakZone * fetch * (0.70 + 0.95 * xp);
+    // A BREAKER IS A LINE, AND A LINE NEEDS AN OPEN TROUGH BEHIND IT. 0.02/0.13/0.46 is a 44%
+    // duty cycle: crests 1.25 u apart, each 0.55 u wide, leaves 0.7 u of gap that the bubble
+    // tile then fills in anyway — so the set has no negative space in it and reads as a mat of
+    // chips rather than as surf. 27% opens the trough. The DC constant tracks it (the mean of
+    // the new window is 0.135, not 0.24) or the band term below darkens the whole shelf.
+    float band = smoothstep(0.03, 0.11, ph) * (1.0 - smoothstep(0.11, 0.30, ph));
+    col *= 1.0 + (band - 0.14) * 0.44 * breakZone * fetch * (0.60 + 0.60 * xp);
+    // Decay tuned so TWO crest lines stand off the beach and the third is a hint: at 0 / 1.25 /
+    // 2.50 u out that is 1.00 / 0.27 / 0.07 of full strength. At 0.76 the third and fourth lines
+    // were still at 0.21 and 0.10 — under a bubble mat that multiplies up to 1.38 those are not
+    // faint breakers, they are the outer half of the white field.
+    float surf = band * exp(-max(sd, 0.0) * 1.05) * breakZone * fetch * (0.70 + 0.95 * xp);
     // the swash sheet right at the lip, phased off the same bands
     float inner = (1.0 - smoothstep(0.06, 0.26 + 0.34 * xp, sdC)) * calm * (0.40 + 0.85 * band);
 
@@ -1701,11 +1763,17 @@ const OCEAN_FRAG = /* glsl */`
     // hard 0.18-0.68 window this used to close on turned the mat into a field of 1 px white
     // dashes and put 24 HF_rms into the near bay against a 15 ceiling, which is confetti by any
     // measure. A wider window keeps the lace and loses the dashes.
+    // ...and the broad shoal wash comes down with them. It is keyed on depth alone, so it is the
+    // one foam term that traces a bathymetry isoline rather than the coast, and at 0.26 it was
+    // laying a half-strength white veil over every shallow the shelf has.
     float foam = contact * 0.72 + inner * 0.34 + surf * 1.05
-               + shoalMask * shoalMask * band * 0.26 * calm * fetch * breakZone;
+               + shoalMask * shoalMask * band * 0.11 * calm * fetch * breakZone;
     foam *= 0.52 + 0.86 * smoothstep(0.10, 0.56, bub);
     foam = max(foam, contact * (0.16 + 0.90 * smoothstep(0.14, 0.62, bub)) * mix(1.0, 0.60, vLake));
-    foam = smoothstep(0.10, 0.80, foam);
+    // The threshold lifts with them. At 0.10 anything the bubble tile touched at all came out
+    // as foam; the contact line and the first breaker are an order above this window and are
+    // untouched, while the 0.2-0.4 tail that WAS the outer lace clears to open turquoise.
+    foam = smoothstep(0.17, 0.84, foam);
     // Whitecaps are RARE. A shelf sea under a working breeze breaks on maybe one crest in
     // twenty, and a field of evenly spaced white dashes is the loudest stamped-texture tell open
     // water has. Wide windows on BOTH gates: a narrow window on the Jacobian is a contour of the
@@ -1872,7 +1940,7 @@ const SHORE_FRAG = /* glsl */`
     // the exact band set the sea runs, continued up the sand: same period, same phase, same
     // scroll, so the run-up on the beach is the tail of the wave that broke on the water
     float ph = fract(sd * (1.0 / 1.25) - uTime * 0.30);
-    float band = smoothstep(0.02, 0.13, ph) * (1.0 - smoothstep(0.13, 0.46, ph));
+    float band = smoothstep(0.03, 0.11, ph) * (1.0 - smoothstep(0.11, 0.30, ph));   // same window as the sea's
     float reach = (1.0 - smoothstep(-0.02, 0.06 + 0.16 * xp, inl)) * (1.0 - smoothstep(0.4, 1.2, above));
     float fetch = mix(0.16, 1.0, clamp(vFetch, 0.0, 1.0));
     // Surf belongs on the WATER. What lands on the sand is a thin swash lip, nothing more:
@@ -2095,7 +2163,11 @@ const RIVER_FRAG = /* glsl */`
     float wetB = smoothstep(1.70, 0.96, au);                  // the damp waterline band
     vec3 bankN = normalize(vec3(nr.x * sign(vU) * 0.9 + slope.x * 0.2, 1.0,
                                 nr.y * sign(vU) * 0.9 + slope.y * 0.2));
-    vec3 bankCol = vec3(0.112, 0.097, 0.070) * (0.45 + 0.95 * r2.b)
+    // DAMP, not dry. This sheet is composited at partial alpha over ground another module owns,
+    // so a mid-value warm gravel reads as a tan wash LYING ON the grass; the only value that
+    // reads as a bank is one darker than everything it can be laid over. Wet earth, then, and
+    // the cut is legible by value the way a real bank is.
+    vec3 bankCol = vec3(0.068, 0.060, 0.046) * (0.45 + 0.95 * r2.b)
                  * sceneLight(0.16 + 0.84 * max(dot(bankN, uSun), 0.0), 0.24 + 0.76 * shadow);
     bankCol *= mix(1.0, 0.34, ao);                            // AO gradient up out of the cut
     bankCol *= mix(vec3(1.0), vec3(0.27, 0.31, 0.38), wetB);  // wet gravel: darker and cooler
