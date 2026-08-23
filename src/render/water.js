@@ -926,7 +926,7 @@ function buildRivers(map, cornerY, levels) {
       const s = i / Math.max(1, N - 1);
       const head = spring ? 0.42 + 0.58 * Math.pow(Math.min(1, i / Math.max(1, N * 0.34)), 0.60) : 1;
       // estuary: the last stretch flares into a mouth instead of stopping on a blunt end
-      const flare = toSea ? 1 + 1.05 * Math.pow(Math.max(0, s - 0.80) / 0.20, 1.6) : 1;
+      const flare = toSea ? 1 + 0.45 * Math.pow(Math.max(0, s - 0.80) / 0.20, 1.6) : 1;
       pts[i].w *= head * (0.80 + 0.20 * s) * flare;
       // The estuary flares AND THEN GOES TO ZERO. No ribbon may survive onto the sea plane: an
       // opaque fan of river water lying on open water, clipped by a straight edge where the
@@ -948,13 +948,18 @@ function buildRivers(map, cornerY, levels) {
       const slope = i > 0 ? (pv.y - p.y) / Math.max(0.05, Math.hypot(p.x - pv.x, p.z - pv.z)) : 0;
       const steep = Math.max(0, Math.min(1, (slope - 0.045) * 3.2));
       // lip height scales with the channel: a brook cuts a hand's depth, a trunk a real bank
-      const lipY = 0.165 + 0.66 * p.w;
+      const lipY = 0.055 + 0.16 * p.w;
       for (let c = 0; c < 7; c++) {
         const u = COL[c], au = Math.abs(u);
         // the damp shoulder is a fixed width in world units, not a multiple of the channel:
         // a brook needs as much bank blend as a trunk river or its edge reads as a cut
-        const off = au > 2.0 ? Math.sign(u) * (p.w + 0.62)
-                  : au > 1.2 ? Math.sign(u) * (p.w + 0.26) : u * p.w;
+        // The berm used to run 0.62 u past the waterline — 1.3 u of raised bank either side of
+        // a 0.5 u channel, i.e. two thirds of a hex of geometry laid OVER terrain.js's ground.
+        // At full alpha that is a brown stripe wider than the river; at the estuary's fade it is
+        // the translucent ribbon with the grass showing through that got this frame rejected.
+        // A damp rim, not a levee: the channel reads as a cut, and the ground stays the ground.
+        const off = au > 2.0 ? Math.sign(u) * (p.w + 0.24)
+                  : au > 1.2 ? Math.sign(u) * (p.w + 0.10) : u * p.w;
         P.push(p.x - tz * off, p.y + (au > 1.2 && au < 2.0 ? lipY : LIFT[c]), p.z + tx * off);
         U.push(u); V.push(arc); F.push(p.w); S.push(steep); D.push(p.fade); TG.push(tx, tz);
       }
@@ -1327,9 +1332,23 @@ const OCEAN_FRAG = /* glsl */`
   // value band-pass off the height channel was tried and carries almost no energy: K_BLOB 8 to
   // 16 moved MID_rms under 3%.)
   const float K_GRAIN = 2.40;    // 1-4 px slope band   -> HF
-  const float K_MIDS  = 6.20;    // 5-20 px slope band  -> MID
-  const float K_BLOB  = 4.00;    // 10-35 px brightness band
-  const float K_CHOP  = 8.00;    // crest-train column shading -> MID
+  const float K_MIDS  = 7.20;    // 5-20 px slope band  -> MID
+  // 4.00 -> 6.20. The MID band the crest gain used to carry by clipping its own crests moves
+  // HERE, where it belongs: a band-passed world-space octave at 10-35 px is wind patches on the
+  // sea — broad, soft, mipped, and incapable of laying a chip anywhere.
+  const float K_BLOB  = 6.20;    // 10-35 px brightness band
+  // MEASURED by driving uK0.y to 0 in a live session: with the crest gain off the
+  // shelf is a clean turquoise with soft mottle, and with it on the same water is a field of
+  // hard white chips. At 8 the column gain ran +1.5 on a pixel that already carried the sand
+  // bed's own brightness, so the up-side clipped channel by channel and every crest washed to
+  // white — a wave train measuring as detail and READING as confetti, which is the note this
+  // frame has been rejected on three times. The wave structure is unchanged; only its contrast
+  // against a bright bottom is, and the MID band it used to carry moves to the blob band, where
+  // it lands as broad wind structure instead of as chips. The gain itself is back at 6.5 —
+  // the crest trains ARE the sea's 6-34 px read and nothing else in this shader lives in that
+  // window — but it is now gated twice: by shoalCalm, so it lies down over a bright bottom, and
+  // by the headroom term below, so it can never clip a pixel to white on either.
+  const float K_CHOP  = 6.50;    // crest-train column shading -> MID
   const float K_LEVEL = 0.86;    // overall water brightness
 
   void main() {
@@ -1397,7 +1416,7 @@ const OCEAN_FRAG = /* glsl */`
     float blob = texture2D(uNoise, bq * (1.0 / 3.00) + 0.21, 2.2).b
                - texture2D(uNoise, bq * (1.0 / 3.00) + 0.21, 4.0).b;
     // soft-capped like the crest gain, for the same reason: a clipped blob band is a stencil
-    blob = blob * K_BLOB; blob = blob / sqrt(1.0 + blob * blob / 0.3600);
+    blob = blob * K_BLOB; blob = blob / sqrt(1.0 + blob * blob / 0.7056);
 
     // Each octave is alive while its own tile is more than about six pixels across.
     float f2 = 1.0 - smoothstep(2.55 * 0.055, 2.55 * 0.150, px);
@@ -1417,7 +1436,15 @@ const OCEAN_FRAG = /* glsl */`
 
     float depth = mix(max(0.0, vWorld.y - (F0.g * 10.0 - 3.0)), 2.6, rimK);
     if (vLake > 0.5) depth = min(depth, 1.5);          // basins are pits; do not read as abyss
-    float shoalCalm = mix(0.80, 1.0, clamp(depth * 1.3, 0.0, 1.0));
+    // THE SHELF CALM, and it is the fix for the white cornflake field, measured by driving
+    // uK0.y to 0 in a live session: over sand the crest gain is not modulating in-scatter, it is
+    // modulating the BED — a cream pixel already near the top of the range — so the positive
+    // half of the band clips, the hue washes out and a wave train comes back as a field of white
+    // chips at constant screen scale. In open water, where the pixel is a dark blue with room
+    // above it, the same gain reads as swell. So the chop lies down over the shoal, which is
+    // also what it does in life: a shoaling crest is shorter and its contrast against a bright
+    // bottom is a fraction of the same crest over the abyss.
+    float shoalCalm = mix(0.38, 1.0, smoothstep(0.10, 1.70, depth));
     shoalCalm *= mix(1.0, 0.92, vLake);
 
     // ---- THE CHOP: THREE TRAVELLING CREST TRAINS, 0.62 / 0.26 / 0.115 u, i.e. 34 / 14 / 6
@@ -1443,18 +1470,22 @@ const OCEAN_FRAG = /* glsl */`
     vec3 t2 = train(p, vec2( 0.174, 0.985), 0.340, 0.23, 0.34 * chopK, 2.0, 0.25) * k2;
     vec3 t3 = train(p, vec2( 0.643, 0.766), 0.185, 0.17, 0.26 * chopK, 2.0, 0.30) * k3;
     vec3 t4 = train(p, vec2( 0.309, 0.951), 0.105, 0.12, 0.16 * chopK, 2.2, 0.35) * k4;
-    float chop = t1.x * 0.22 + t2.x * 0.32 + t3.x * 0.28 + t4.x * 0.18;
+    // Weighted toward the LONG trains. 0.22/0.32/0.28/0.18 put nearly half the crest energy
+    // in the 10 px and 6 px trains, i.e. in the pixel window, which is a sea whose waves are
+    // the size of grain. 34 and 19 px carry it now: those are wave lines a player can follow,
+    // and they land in the band the metric calls structure instead of the one it calls noise.
+    float chop = t1.x * 0.30 + t2.x * 0.36 + t3.x * 0.22 + t4.x * 0.12;
     // ...and its DC, which fades with the SAME weights. Every consumer below uses (chop - mean);
     // leaving the mean constant while chop itself decays with distance darkens the far sea for
     // no reason but a bookkeeping error.
-    float chopDC = 0.845 * (0.332 * 0.22 * k1 + 0.375 * 0.32 * k2 + 0.375 * 0.28 * k3 + 0.359 * 0.18 * k4);
+    float chopDC = 0.845 * (0.332 * 0.30 * k1 + 0.375 * 0.36 * k2 + 0.375 * 0.22 * k3 + 0.359 * 0.12 * k4);
     // SOFT saturation, never a clamp. The crest gain has to be big — the wave bands are the
     // sea's read and they live in the 14-34 px window the eye actually looks at — but a hard
     // clamp on a big gain turns a wave profile into a square wave: it squares off the crest,
     // dumps the missing energy into harmonics (i.e. into pixel-scale fizz) and drives the
     // troughs into the crush floor. This saturates at +1.5 / -0.48 with a continuous slope.
-    float cmR = (chop - chopDC) * K_CHOP * uK0.y;
-    float cm = cmR > 0.0 ? cmR / sqrt(1.0 + cmR * cmR / 2.25)
+    float cmR = (chop - chopDC) * K_CHOP * uK0.y * shoalCalm;
+    float cm = cmR > 0.0 ? cmR / sqrt(1.0 + cmR * cmR / 1.4400)
                          : 0.48 * cmR / sqrt(1.0 + cmR * cmR / 0.2304);
 
     // Slope budget. The octaves are RMS-normalised in buildNoiseTexture, so each contributes the
@@ -1530,7 +1561,7 @@ const OCEAN_FRAG = /* glsl */`
     // that modulation is the only thing keeping the sea from being a plane.
     scatter *= (1.0 + clamp(vCrest * 0.75, -0.9, 0.9) * 0.26 * mix(1.0, 0.40, vLake)
                     + cm * mix(1.0, 0.55, vLake)
-                    + blob * 0.75 * farFade)
+                    + blob * 1.05 * farFade)
              * (0.90 + 0.18 * streak);
     // Every wave has to have a lit side and a shaded side, or the sea is a photograph of marble.
     // The sun is low, so what separates a crest face from a trough face is not N.y (which barely
@@ -1584,8 +1615,19 @@ const OCEAN_FRAG = /* glsl */`
     // rest — so shallow water came out with no wave shape in it however hard the swell was
     // driven. Tilting the surface changes what gets THROUGH it exactly as much as what scatters
     // in it, so the shading law belongs on the column, not on one term of it.
-    col *= 1.0 + cm + clamp(dot(N.xz, sazi) * 2.0, -0.70, 1.00) * 0.16
-              + blob * mix(0.55, 1.0, farFade);
+    // HEADROOM, and this is the other half of the cornflake fix. Every wave gain in this
+    // shader is a MULTIPLIER on a pixel that already carries the bed's own light, and over a
+    // sand shelf that pixel starts near the top of the range: the positive half of the band
+    // clips channel by channel, the hue washes out, and a wave train arrives as a field of
+    // white chips at constant screen scale — which is exactly what "screen-space confetti"
+    // looks like from the outside even when the driver is honest world-space material. So the
+    // UP-side of every band is scaled by what is actually left above the pixel. The down-side
+    // is untouched: a trough has all the room it needs, and symmetric attenuation would just
+    // flatten the sea.
+    float head = clamp((1.02 - max(max(col.r, col.g), col.b)) * 1.45, 0.26, 1.0);
+    float cmH = cm > 0.0 ? cm * head : cm;
+    col *= 1.0 + cmH + clamp(dot(N.xz, sazi) * 2.0, -0.70, 1.00) * 0.16
+              + blob * 1.30 * mix(0.55, 1.0, farFade) * mix(head, 1.0, 0.45);
     // THE CREST LINE. A wave's last few centimetres are a thin sheet of aerated, backlit water
     // and they read as a bright HAIRLINE along the crest — thinner than the crest's own profile
     // and an order brighter than the trough. Because it is a THIN LINE LYING ALONG A WAVE it
@@ -1636,13 +1678,24 @@ const OCEAN_FRAG = /* glsl */`
     // face the sun, and a broad lobe on a contour draws broad pale squiggles.
     vec3 NM = normalize(vec3(vGN.x + t1.y + t2.y, vGN.y, vGN.z + t1.z + t2.z));
     vec3 spec = sunSpec(NM, V, H, 0.26, 0.075 * path * (0.55 + 0.70 * streak))
-              + sunSpec(N, V, H, rough, (0.230 * track + 0.008) * (0.35 + 0.90 * streak)
+              + sunSpec(N, V, H, rough, (0.150 * track + 0.006) * (0.35 + 0.90 * streak)
                         * (0.60 + 1.10 * smoothstep(0.30, 0.92, chop))
                         * mix(0.55, 1.0, f3)
-                        * smoothstep(0.02, 0.22, depth)
+                        // GLITTER IS FOR DEEP WATER. Over the shelf the pixel is already the
+                        // sand bed's own light and an additive white lobe on top of it has
+                        // nowhere to go but to white — measured by driving uK1.x to 0 in a live
+                        // session, which is what finally identified the "uniform white/cyan
+                        // speckle from shore to horizon" as the glitter path rather than as
+                        // foam or as the crest gain. Over the abyss, where the pixel is a dark
+                        // blue with three stops of room above it, the same lobe is the sun path
+                        // a golden-hour sea is famous for, so it stays there at full strength.
+                        * smoothstep(0.10, 0.95, depth)
                         * (1.0 - smoothstep(240.0, 420.0, dist)));
     spec = spec / (1.0 + spec * 0.42);                       // soft knee, hue preserved
-    col += spec * uK1.x * vec3(1.16, 1.00, 0.78) * shadeSpec * mix(0.80, 1.0, vOpen);
+    // ...and the same headroom rule the bands get: an ADDITIVE highlight on a pixel that has
+    // no range left is not a highlight, it is a clipped white chip with no hue.
+    col += spec * uK1.x * vec3(1.16, 1.00, 0.78) * shadeSpec * mix(0.80, 1.0, vOpen)
+         * mix(0.38, 1.0, head);
 
     // ---- subsurface: a crest is a thin sheet with the sun behind it, and it glows green
     float back = pow(clamp(0.5 + 0.5 * dot(V, -uSun), 0.0, 1.0), 3.0);
@@ -1677,8 +1730,11 @@ const OCEAN_FRAG = /* glsl */`
     // it is BOTH dragging on the bottom AND close enough to the beach that its run-up has
     // somewhere to go. Keyed on depth alone the phase term traces whatever isoline the shelf
     // happens to have and paints it white, four hexes out in open water. Both gates, ANDed.
-    float breakZone = (1.0 - smoothstep(1.05, 2.30, depth))
-                    * (1.0 - smoothstep(2.2, 3.8, max(sdRaw, 0.0)));
+    // Both gates pulled in HARD. At 1.05-2.30 m of depth AND 3.8 u of standoff the zone was
+    // most of a shelf — three hexes of open water dusted in white lace at constant screen scale,
+    // which is the confetti the last three reviews measured. Surf lives in the last hex.
+    float breakZone = (1.0 - smoothstep(0.55, 1.30, depth))
+                    * (1.0 - smoothstep(0.9, 2.0, max(sdRaw, 0.0)));
 
     // (a) the contact line: always present, on every coast, rock and hull that pierces the sheet
     float contact = (1.0 - smoothstep(0.0, 0.16 + 0.16 * xp, sdC)) * calm;
@@ -1693,7 +1749,7 @@ const OCEAN_FRAG = /* glsl */`
     col *= 1.0 + (band - 0.24) * 0.44 * breakZone * fetch * (0.60 + 0.60 * xp);
     // decay slow enough that three crest lines stand off the beach at once, at 1.25 / 2.50 /
     // 3.75 u out and 0.46 / 0.21 / 0.10 of full strength: a set of breakers building on a beach.
-    float surf = band * exp(-max(sd, 0.0) * 0.76) * breakZone * fetch * (0.70 + 0.95 * xp);
+    float surf = band * exp(-max(sd, 0.0) * 1.30) * breakZone * fetch * (0.70 + 0.95 * xp);
     // the swash sheet right at the lip, phased off the same bands
     float inner = (1.0 - smoothstep(0.06, 0.26 + 0.34 * xp, sdC)) * calm * (0.40 + 0.85 * band);
 
@@ -1702,10 +1758,10 @@ const OCEAN_FRAG = /* glsl */`
     // dashes and put 24 HF_rms into the near bay against a 15 ceiling, which is confetti by any
     // measure. A wider window keeps the lace and loses the dashes.
     float foam = contact * 0.72 + inner * 0.34 + surf * 1.05
-               + shoalMask * shoalMask * band * 0.26 * calm * fetch * breakZone;
+               + shoalMask * shoalMask * band * 0.09 * calm * fetch * breakZone;
     foam *= 0.52 + 0.86 * smoothstep(0.10, 0.56, bub);
     foam = max(foam, contact * (0.16 + 0.90 * smoothstep(0.14, 0.62, bub)) * mix(1.0, 0.60, vLake));
-    foam = smoothstep(0.10, 0.80, foam);
+    foam = smoothstep(0.26, 0.92, foam);
     // Whitecaps are RARE. A shelf sea under a working breeze breaks on maybe one crest in
     // twenty, and a field of evenly spaced white dashes is the loudest stamped-texture tell open
     // water has. Wide windows on BOTH gates: a narrow window on the Jacobian is a contour of the
@@ -1719,7 +1775,10 @@ const OCEAN_FRAG = /* glsl */`
 
     // Foam is a LIT material — a mat of bubbles with a sun side and a shade side — not an
     // additive white overlay, and it is COOLER than the sand it lies on. Warm foam reads as snow.
-    vec3 foamCol = vec3(0.30, 0.50, 0.68) * (0.62 + 0.62 * shadow) * mix(0.72, 1.18, churn)
+    // Foam is aerated SEA WATER, so it is near-neutral with a cool bias — not cyan pigment.
+    // At 0.30/0.50/0.68 every white cap in the frame was a chip of cyan, which is what made the
+    // whole shelf read as one turquoise speckle field from shore to horizon.
+    vec3 foamCol = vec3(0.56, 0.60, 0.65) * (0.62 + 0.62 * shadow) * mix(0.72, 1.18, churn)
                  * (1.0 + face * 0.18) * mix(0.52, 1.0, shoalF);
     col = mix(col, foamCol, foam * uK1.z);
 
@@ -1766,9 +1825,9 @@ const OCEAN_FRAG = /* glsl */`
     // half of the band is gone — mean up, saturation down, hue washed. Measured once already at
     // mean 201 / saturation 0.17 on the deep NE. +1.70 up, -0.82 down, both continuous.
     float bandK = gA + gB;
-    bandK = bandK > 0.0 ? bandK / sqrt(1.0 + bandK * bandK / 2.8900)
+    bandK = bandK > 0.0 ? bandK / sqrt(1.0 + bandK * bandK / 1.5625)
                         : 0.82 * bandK / sqrt(1.0 + bandK * bandK / 0.6724);
-    col *= 1.0 + bandK;
+    col *= 1.0 + (bandK > 0.0 ? bandK * mix(head, 1.0, 0.35) : bandK);
 
     // ---- THE BOARD. The hex lattice, drawn on the water AFTER the water is shaded, off the
     // still plane and never off the wave normal. This is a turn-based strategy game: a player
@@ -1785,7 +1844,7 @@ const OCEAN_FRAG = /* glsl */`
 
     // ---- alpha: opaque except right at the waterline, where a little translucency softens the
     // cut between the hex mesh and the beach.
-    float alpha = smoothstep(-0.17, 0.05, sdA) * mix(0.94, 1.0, smoothstep(0.0, 0.16, depth));
+    float alpha = smoothstep(-0.26, 0.10, sdA) * mix(0.94, 1.0, smoothstep(0.0, 0.16, depth));
     alpha = max(alpha, reed);
     alpha = clamp(max(alpha, foam * 0.96), 0.0, 1.0);
     if (alpha < 0.015) discard;   // fray, do not fade: a 2% sheet still writes depth and z-fights
@@ -1860,14 +1919,14 @@ const SHORE_FRAG = /* glsl */`
     // cycle, so the tide line moves. Keyed on DISTANCE, not on height above the water — a beach
     // hex here stands most of a unit proud of the sea and a height gate never fires.
     float tide = 0.30 * sin(uTime * 1.0134);
-    float wet = (1.0 - smoothstep(-0.10, 1.15 + tide, inl)) * (1.0 - smoothstep(1.0, 2.2, above));
+    float wet = (1.0 - smoothstep(-0.10, 0.62 + tide * 0.5, inl)) * (1.0 - smoothstep(0.7, 1.6, above));
     // OFFSHORE FADE, and it is a bug fix, not a tweak. The apron is allowed to run 1.1 u past
     // the waterline so its band never gets cut off mid-ramp, but wet was held at FULL over
     // all of that, so a submerged shelf tile got a 48% darkening that ended on the hex-template
     // boundary: a straight-edged tonal facet lying under the water of every harbour. Fade it to
     // nothing well before the discard and no polygon edge of this mesh can ever be offshore.
     wet *= smoothstep(-1.05, -0.12, inl);
-    wet = clamp(wet * 1.30, 0.0, 1.0);
+    wet = clamp(wet * 1.12, 0.0, 1.0);
 
     // the exact band set the sea runs, continued up the sand: same period, same phase, same
     // scroll, so the run-up on the beach is the tail of the wave that broke on the water
@@ -1885,15 +1944,19 @@ const SHORE_FRAG = /* glsl */`
     // Damp sand is DARKER and SHINIER, and it is a multiplier on whatever the terrain painted:
     // 0.50 at the tide line easing back to dry. The blue-shifted tint is the wet grain's own
     // specular bounce, not a colour cast.
-    float k = mix(1.0, 0.44, wet);
-    vec3 tint = mix(vec3(1.0), vec3(0.95, 0.99, 1.08), wet);
+    float k = mix(1.0, 0.66, wet);
+    // WARM, not cool. A blue-lifted damp band turned every beach hex salmon: it holds R, holds
+    // G and LIFTS B, so tan (R>G>B) collapses to R>G==B, which is the pink-shore a critic
+    // measured at hue 358 against lit sand at hue 29. Wet grain is the DRY grain with the air
+    // taken out of it — darker, very slightly warmer, same hue. Nothing here may move hue.
+    vec3 tint = mix(vec3(1.0), vec3(1.04, 1.00, 0.95), wet);
 
     // roughness 0.85 dry -> 0.28 at the tide line: wet grain is a mirror of wet grain
     vec3 N = normalize(vec3((nD.r - 0.5) * 0.22 * f4, 1.0, (nD.g - 0.5) * 0.22 * f4));
     vec3 H = normalize(V + uSun);
     vec3 film = sunSpec(N, V, H, mix(0.85, 0.28, wet), 1.15) * shadow * wet * (1.0 - foam) * 0.85;
 
-    vec3 foamCol = vec3(0.30, 0.50, 0.68) * (0.60 + 0.60 * shadow) * mix(0.72, 1.18, churn) * 0.82;
+    vec3 foamCol = vec3(0.60, 0.64, 0.68) * (0.60 + 0.60 * shadow) * mix(0.72, 1.18, churn) * 0.62;
 
     float a = 1.0 - k * (1.0 - foam);
     if (a < 0.004 && foam < 0.004) discard;
@@ -2098,7 +2161,7 @@ const RIVER_FRAG = /* glsl */`
     vec3 bankCol = vec3(0.112, 0.097, 0.070) * (0.45 + 0.95 * r2.b)
                  * sceneLight(0.16 + 0.84 * max(dot(bankN, uSun), 0.0), 0.24 + 0.76 * shadow);
     bankCol *= mix(1.0, 0.34, ao);                            // AO gradient up out of the cut
-    bankCol *= mix(vec3(1.0), vec3(0.27, 0.31, 0.38), wetB);  // wet gravel: darker and cooler
+    bankCol *= mix(vec3(1.0), vec3(0.52, 0.48, 0.42), wetB);  // wet gravel: darker, hue held
 
     // Soft edges: the ribbon fades over ~8% of its own width instead of stopping on a hard
     // alpha cut, which is what leaves the stair-stepped silhouette an unfiltered decal shows.
