@@ -49,7 +49,7 @@ const SHORE_JITTER = 0.30;      // ... and much more of it on the waterline, to 
 const WALL_MIN = 0.10;          // steps shorter than this are not worth a wall
 const TREE_BUDGET = 1500;      // per foliage batch
 const CLUTTER = 12000;         // ground-clutter instances alive at once
-const CLUT_R = 27;             // ... and how far out they are scattered
+const CLUT_R = 25;             // ... and how far out they are scattered
 
 // sRGB base tint + splat weights (veg, dry, snow) + centre lift. The lift is what domes a tile;
 // summits keep only enough of it to seat the ridge meshes, which now own the silhouette.
@@ -60,18 +60,25 @@ const CLUT_R = 27;             // ... and how far out they are scattered
 // buffer. The phase-4 palette was authored as if that step did not exist, which is the whole
 // of the "acid green against orange" read. 0.19 in, ~0.35 out, one warm-olive family.
 const BIOME = {
+  // HUE IS AUTHORED BACKWARDS FROM THE MEASURED FRAME, not from the hex code. The shader ends
+  // on col*col and the fill is albedo-squared and warm, so a base channel ratio lands at
+  // roughly ratio^1.5 times a per-channel lighting constant (measured: 1.58 on R/G, 1.02 on
+  // B/G, 1.05 on G/R). Authoring #5C7A3A straight into `c` is what produced a measured hue of
+  // 66 — yellow olive — on ground the bible puts at 88. These triples are solved so the
+  // SCREEN lands on the bible: grass 88, plains 55, desert 38, three separable families
+  // instead of the two that had collapsed into one khaki.
   ocean:    { c: [0.24, 0.24, 0.20], veg: 0.00, dry: 0.45, snow: 0.00, lift: 0.00 },
-  coast:    { c: [0.478, 0.442, 0.335], veg: 0.00, dry: 0.90, snow: 0.00, lift: 0.00 },
-  beach:    { c: [0.502, 0.460, 0.352], veg: 0.04, dry: 1.00, snow: 0.00, lift: 0.00 },
-  grass:    { c: [0.352, 0.496, 0.312], veg: 1.00, dry: 0.04, snow: 0.00, lift: 0.03 },
+  coast:    { c: [0.478, 0.426, 0.335], veg: 0.00, dry: 0.90, snow: 0.00, lift: 0.00 },
+  beach:    { c: [0.502, 0.446, 0.352], veg: 0.04, dry: 1.00, snow: 0.00, lift: 0.00 },
+  grass:    { c: [0.306, 0.496, 0.333], veg: 1.00, dry: 0.04, snow: 0.00, lift: 0.03 },
   plains:   { c: [0.444, 0.512, 0.330], veg: 0.80, dry: 0.30, snow: 0.00, lift: 0.03 },
-  desert:   { c: [0.516, 0.465, 0.361], veg: 0.01, dry: 1.00, snow: 0.00, lift: 0.02 },
-  tundra:   { c: [0.456, 0.512, 0.358], veg: 0.34, dry: 0.26, snow: 0.26, lift: 0.06 },
+  desert:   { c: [0.524, 0.458, 0.352], veg: 0.01, dry: 1.00, snow: 0.00, lift: 0.02 },
+  tundra:   { c: [0.408, 0.512, 0.372], veg: 0.34, dry: 0.26, snow: 0.26, lift: 0.06 },
   snow:     { c: [0.845, 0.885, 0.945], veg: 0.00, dry: 0.00, snow: 1.00, lift: 0.55 },
-  forest:   { c: [0.306, 0.430, 0.270], veg: 1.00, dry: 0.00, snow: 0.00, lift: 0.05 },
-  jungle:   { c: [0.272, 0.388, 0.243], veg: 1.00, dry: 0.00, snow: 0.00, lift: 0.05 },
-  hills:    { c: [0.432, 0.512, 0.330], veg: 0.70, dry: 0.20, snow: 0.00, lift: 0.40 },
-  mountain: { c: [0.462, 0.436, 0.386], veg: 0.06, dry: 0.05, snow: 0.04, lift: 0.85 },
+  forest:   { c: [0.274, 0.430, 0.289], veg: 1.00, dry: 0.00, snow: 0.00, lift: 0.05 },
+  jungle:   { c: [0.247, 0.388, 0.261], veg: 1.00, dry: 0.00, snow: 0.00, lift: 0.05 },
+  hills:    { c: [0.366, 0.512, 0.353], veg: 0.70, dry: 0.20, snow: 0.00, lift: 0.40 },
+  mountain: { c: [0.446, 0.436, 0.406], veg: 0.06, dry: 0.05, snow: 0.04, lift: 0.85 },
 };
 const FALLBACK = BIOME.grass;
 
@@ -1233,7 +1240,7 @@ export class Terrain {
           float sBed  = smoothstep( 2.0, 5.0, 0.6200 / mppY );   // 0.62 u beds
           float sFine = smoothstep( 2.0, 4.5, 0.2100 / mppY );   // 0.21 u laminae
           float detail = smoothstep( 2.2, 5.0, 0.3330 / mpp );   // nMes, uNoise 4.0 u tile / 12
-          float dNear  = smoothstep( 3.0, 6.5, 0.1438 / mpp );   // nMic, uDet   4.6 u tile / 32
+          float dNear  = smoothstep( 4.2, 7.2, 0.1438 / mpp );   // nMic, uDet   4.6 u tile / 32
           float dClose = smoothstep( 2.0, 4.4, 0.0547 / mpp );   // nFin, uDet   1.75 u tile / 32
           float up = abs( wn.y );
           float flatness = smoothstep( 0.30, 0.78, up );
@@ -1435,8 +1442,8 @@ export class Terrain {
           // whole near field, and 35% on a 6 px band, SQUARED by the gamma-2 lift at the end of
           // this shader, is a field of blown white specks — cottage cheese, not sward. Detail
           // energy belongs on the 18-50 px bands above, where a player reads material.
-          gCol *= mix( 1.0, 1.0 + ( gMic - 0.5 ) * 0.38 * gGate, dNear );
-          gCol *= 1.0 + ( gFin - 0.5 ) * 0.62 * dClose * gGate;
+          gCol *= mix( 1.0, 1.0 + ( gMic - 0.5 ) * 0.24 * gGate, dNear );
+          gCol *= 1.0 + ( gFin - 0.5 ) * 0.35 * dClose * gGate;
           // The macro band's job is HUE, not value: blue-green swale to yellow-green rise,
           // about 7 degrees apart at matched luminance. Half the old swing — 1.050/0.916 across
           // R and B was a 14% chroma push, and against warm sand that is the acid-green read.
@@ -1446,7 +1453,7 @@ export class Terrain {
           // ladder. Pushing it into the base tint instead just gets averaged back out by the
           // neutral sky fill; this holds the sward inside the 0.30-0.45 band the script wants
           // without touching hue or value.
-          gCol = mix( vec3( dot( gCol, vec3( 0.30, 0.59, 0.11 ) ) ), gCol, 1.54 );
+          gCol = mix( vec3( dot( gCol, vec3( 0.30, 0.59, 0.11 ) ) ), gCol, 1.46 );
           gCol = mix( gCol, gCol * vec3( 0.86, 0.93, 0.83 ), pd.b * 0.45 );          // forest sward
           // bare soil showing between the clumps: the dark end of the value range, same family
           gCol = mix( gCol, gCol * vec3( 0.84, 0.79, 0.70 ), smoothstep( 0.34, 0.06, sharp( nMic.a, 1.5 ) ) * 0.20 * dNear );
@@ -1461,24 +1468,31 @@ export class Terrain {
           // grain band that the mip chain then averaged straight back out.
           vec3 sCol = vec3( 0.5 );
           if ( wSand > 0.003 ) {
-          sCol = mix( vec3( 0.392, 0.340, 0.282 ), vec3( 0.482, 0.420, 0.346 ), 0.30 + 0.36 * nMac.b + 0.26 * nVar.b );
+          sCol = mix( vec3( 0.398, 0.338, 0.292 ), vec3( 0.490, 0.416, 0.358 ), 0.30 + 0.36 * nMac.b + 0.26 * nVar.b );
           sCol *= v32;
           // the ripple is in the ALBEDO too, not just the normal: a lit crest and a shaded
           // trough is what says "sand" in one glance, and it survives a flat-lit frame
           sCol *= 1.0 + duneL * 0.042;
-          sCol *= 0.905 + 0.180 * nMes.b;                                             // 480-48 px drift
+          sCol *= 0.930 + 0.140 * nMes.b;                                             // 480-48 px drift
           // DUNE RIDGES, in the albedo and at a size a player can see: the 24 px cell field
           // shaped into crests and slacks. This is the macro layer the material had none of.
-          sCol *= 0.866 + 0.258 * smoothstep( 0.20, 0.78, nMes.a );                   // 290-24 px
+          sCol *= 0.952 + 0.090 * smoothstep( 0.20, 0.78, nMes.a );                   // 290-24 px
           // grain, not a crack network: blending the cellular A channel halfway into the smooth
           // B one is what stops the near sand reading as dried mud instead of sand.
           float sGrain = smoothstep( 0.12, 0.88, nMic.a );                            // 330-10 px (MID)
-          sCol *= mix( 1.0, 1.0 + ( sGrain - 0.5 ) * 0.42 * gGate, dNear );
-          sCol *= 1.0 + ( gFin - 0.5 ) * 0.36 * dClose * gGate;
+          float sGate = 0.66 + 0.44 * smoothstep( 0.16, 0.78, nMac.b );
+          sCol *= mix( 1.0, 1.0 + ( sGrain - 0.5 ) * 0.24 * sGate, dNear );
+          // GRAIN, not stain. The near sand measured MID/HF 1.40 — every band it owned sat in
+          // the 24-60 px blob range and the 3 px one it needed was worth 18%. Sand is the one
+          // material a player sees from 40 cm away, so the finest band carries real weight.
+          sCol *= 1.0 + ( gFin - 0.5 ) * 0.84 * dClose * sGate;
+          // pebble grit at the near LOD: hard cell BORDERS off the finest tap, so the energy
+          // lands at 3 px where HF_rms reads it instead of smearing into another soft blob.
+          sCol *= 1.0 - smoothstep( 0.26, 0.05, sharp( nFin.a, 2.6 ) ) * 0.36 * dClose;
           // grit: darker grains of the SAME hue, gated into fields by the macro mask, so a
           // beach is never leopard print
           float gvl = smoothstep( 0.36, 0.74, nMes.a * 0.6 + nVar.b * 0.4 ) * dNear;
-          sCol = mix( sCol, sCol * vec3( 0.800, 0.766, 0.712 ), smoothstep( 0.56, 0.90, sGrain ) * 0.30 * gvl );
+          sCol = mix( sCol, sCol * vec3( 0.800, 0.766, 0.712 ), smoothstep( 0.56, 0.90, sGrain ) * 0.26 * gvl );
           sCol = mix( sCol, sCol * vec3( 1.06, 1.05, 1.02 ), smoothstep( 0.78, 0.96, sharp( nFin.a, 2.0 ) ) * 0.14 * dClose );
           }
 
@@ -1519,7 +1533,7 @@ export class Terrain {
           // "blurry blobs, no material" on the far massif. Cavity AO keeps the 10 px band at
           // a third of its old depth, because that one is shape rather than grain.
           float frac = smoothstep( 0.22, 0.02, sharp( nFin.a, 3.0 ) );                // joints, 3.4 px
-          rCol *= 1.0 - frac * ( 0.38 + 0.30 * wall ) * mix( 0.55, 1.0, dClose );
+          rCol *= 1.0 - frac * ( 0.30 + 0.26 * wall ) * mix( 0.55, 1.0, dClose );
           float cav = smoothstep( 0.58, 0.18, 0.55 * nMes.a + 0.45 * sharp( nMic.a, 1.6 ) );
           rCol *= 1.0 - cav * 0.13 * ( 0.45 + 0.55 * detail );
           rCol *= 0.968 + 0.062 * smoothstep( 0.22, 0.80, nMes.a );                   // block scatter, 20 px
@@ -1533,7 +1547,7 @@ export class Terrain {
           // A 3 px feature contributes ~1.0 to HF_rms and ~0.12 to MID_rms, so this is the one
           // band that keeps a far massif from mipping down to a painted plate without adding
           // any of the blur the metric reads as structureless.
-          rCol *= 1.0 + ( gFin - 0.5 ) * 0.86 * mix( 0.55, 1.0, dClose )
+          rCol *= 1.0 + ( gFin - 0.5 ) * 0.47 * mix( 0.55, 1.0, dClose )
                       + ( smoothstep( 0.16, 0.84, nMic.a ) - 0.5 ) * 0.06 * dNear;
           rCol = mix( rCol, rCol * vec3( 0.86, 1.06, 0.79 ), nMac.b * 0.30 * ( 1.0 - wall ) );   // lichen
           // talus: a gravel wash over the bottom third only, so it grounds the cut without
@@ -1557,13 +1571,14 @@ export class Terrain {
           // feature's high-pass gain is 0.02 against 0.9 for a 3 px one — which is exactly why
           // structure has to be bought here and not by turning the fine taps up.
           float mLo = smoothstep( 0.18, 0.82, nMes.a * 0.62 + nMes.b * 0.38 );
-          col *= 1.0 + ( mLo - 0.5 ) * 0.146 * ( 1.0 - wRock * 0.72 );
+          col *= 1.0 + ( mLo - 0.5 ) * 0.104 * ( 1.0 - wRock * 0.72 );
           col *= mix( vec3( 0.985, 0.994, 1.010 ), vec3( 1.018, 1.002, 0.976 ), mLo );
           // A SECOND macro band, one octave coarser and pure value: 78-1080 px shapes — swales,
           // soil sheets, the pale rise on a dune field. This is the band MID_rms is a band-pass
           // ON, it costs nothing in HF, and without it the material's whole budget sits on
           // grain and measures as noise-beats-structure however much grain there is.
-          col *= 1.0 + ( smoothstep( 0.20, 0.80, nMac.b * 0.55 + nMac.a * 0.45 ) - 0.5 ) * 0.268 * ( 1.0 - wRock * 0.55 );
+          col *= 1.0 + ( smoothstep( 0.20, 0.80, nMac.b * 0.55 + nMac.a * 0.45 ) - 0.5 )
+                     * 0.268 * ( 1.0 - wRock * 0.55 ) * ( 1.0 - wSand * 0.18 );
 
           // wet sand and riparian mud darken and warm rather than going grey
           col *= mix( vec3( 1.0 ), vec3( 0.700, 0.628, 0.522 ), wet * ( 1.0 - wSnow ) );
@@ -2129,7 +2144,15 @@ export class Terrain {
           vec4 lf = texture2D( uDet, vTWP.xz * 0.36 + vec2( vTWP.y * 0.25, vTWP.y * -0.16 ) );
           vec4 lm = texture2D( uNoise, vTWP.xz * 0.31 + vec2( vTWP.y * -0.22, vTWP.y * 0.14 ) + vec2( 0.27, 0.63 ) );
           vec4 lc = texture2D( uNoise, vTWP.xz * 0.055 + vec2( 0.4, 0.7 ) );
-          diffuseColor.rgb *= vec3( 0.80 + 0.40 * lf.a ) * ( 0.86 + 0.30 * lm.a )
+          // FOOTPRINT GATE, the same one every ground band has. The leaf tap is a 2.78 u tile
+          // over a 32-cell atlas, i.e. an 8.7 cm clump, and it ran at full strength to the back
+          // of the frame: constant screen-frequency speckle on every canopy at every depth,
+          // which is per-pixel confetti by the bible's definition and most of the midfield's
+          // HF. Near canopies keep their leaves; far ones mip down to a mass, which is what a
+          // stand of trees actually does.
+          vec3 tdx = dFdx( vTWP ), tdy = dFdy( vTWP );
+          float tFin = smoothstep( 2.2, 4.2, 0.0868 / ( max( length( tdx ), length( tdy ) ) + 1e-6 ) );
+          diffuseColor.rgb *= mix( vec3( 1.0 ), vec3( 0.80 + 0.40 * lf.a ), tFin ) * ( 0.86 + 0.30 * lm.a )
             * mix( vec3( 1.05, 1.00, 0.86 ), vec3( 0.80, 1.00, 0.90 ), lf.b )
             * ( 0.82 + 0.36 * lc.b ) * 0.50;
           diffuseColor.rgb = mix( vec3( dot( diffuseColor.rgb, vec3( 0.32, 0.56, 0.12 ) ) ) * vec3( 1.04, 1.0, 0.88 ),
@@ -2295,12 +2318,12 @@ export class Terrain {
           rock *= 1.0 - smoothstep( 0.18, 0.02, rk2.a ) * 0.24;           // slab joints
           rock *= mix( 1.0, 0.955 + 0.09 * smoothstep( 0.24, 0.76, rk3.a ), rNear );  // 10 px grain
           rock *= 1.0 - smoothstep( 0.30, 0.07, rk3.a ) * 0.13 * mix( 0.5, 1.0, rNear );  // joints, 10 px
-          rock *= 1.0 - smoothstep( 0.24, 0.03, rk4.a ) * 0.42 * mix( 0.5, 1.0, rFin );   // hairlines, 3.4 px
+          rock *= 1.0 - smoothstep( 0.24, 0.03, rk4.a ) * 0.32 * mix( 0.5, 1.0, rFin );   // hairlines, 3.4 px
           rock *= mix( 1.0, 0.932 + 0.136 * rk3.a, rNear );               // cavity AO
           // 3.4 px grit, LOD'd by the mip chain and by nothing else. Every band above this one
           // lands in MID; this is the only one that lands in HF, so it is what keeps a distant
           // flank from mipping down to a painted plate.
-          rock *= 0.812 + 0.376 * smoothstep( 0.26, 0.74, rk4.a );
+          rock *= 0.896 + 0.208 * smoothstep( 0.26, 0.74, rk4.a );
 
           // snow: needs altitude, a face that is not sheer, and it favours the lee side.
           // Wind noise strips it off the exposed crest, so it never reads as a white wash.
@@ -2495,7 +2518,13 @@ export class Terrain {
         // ...and its occlusion pool. Lifted 3.5 cm so the disc clears the ground triangle on
         // a slope; that is 1 px on screen and invisible, and it is the whole reason these
         // things sit ON the ground instead of hovering over a painted floor.
-        if (dw < DMAX && fade > 0.30 && kind !== 2 && sz > 0.26) {
+        // EVERY instance drops its own pool. This gate used to read `kind !== 2 && sz > 0.26`:
+        // pebbles got no decal at all and, because sz = h4*h4, so did roughly half of every
+        // other prop — which is exactly the measured "two identical rocks on one tile, contact
+        // deltas +38 and +5 luma". Same prop, same tile, one grounded and one pasted on. The
+        // pool is already sized CLUTTER + CLUTTER/2, one slot per instance, so the gate bought
+        // nothing but the inconsistency. A small prop gets a small pool, never no pool.
+        if (dw < DMAX && fade > 0.22) {
           pos.y = y + 0.035;
           scl.set(foot * (0.85 + 0.55 * sz), 1, foot * (0.85 + 0.55 * sz));
           e.set(0, h2 * 6.283, 0); q.setFromEuler(e);
