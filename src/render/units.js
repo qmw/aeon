@@ -155,7 +155,10 @@ function teamOf(spec) {
     const a = new THREE.Color().setHSL(hsl.h, Math.min(0.74, hsl.s * 0.88 + 0.14), THREE.MathUtils.clamp(hsl.l * 0.50, 0.21, 0.32), THREE.SRGBColorSpace);
     const f = new THREE.Color().setHSL(hsl.h, Math.min(0.96, hsl.s * 1.12 + 0.18), THREE.MathUtils.clamp(hsl.l * 0.62, 0.28, 0.42), THREE.SRGBColorSpace);
     const b = new THREE.Color().setHSL(hsl.h, hsl.s * 0.30, 0.70, THREE.SRGBColorSpace);
-    t = { a: a.getHex(), b: b.getHex(), flag: f.getHex(), raw: col };
+    // The BASE DISC carries the raw livery at full chroma. It is the one surface on a unit
+    // that is pure ownership signal — no weave, no weathering, no dye lot — which is how Civ
+    // gets a player's colour onto 35% of a soldier's projected pixels without painting him.
+    t = { a: a.getHex(), b: b.getHex(), flag: f.getHex(), disc: f.getHex(), raw: col };
     _livery.set(col, t);
   }
   return t;
@@ -306,12 +309,7 @@ void main(){
   #else
     float psz = 1.0;
   #endif
-  // The psz term is the one that bites at gameplay zoom: the screen-space push only wins up
-  // close, so at 30 units the whole cast was wearing a 1.2 px contour it could not be read by.
-  // 0.115 of the part's own size lands a torso at ~2 px and a bracer under 1 — Civ's contour,
-  // thickest on the masses that carry the silhouette — and changes nothing at portrait range,
-  // where uPx still clamps it.
-  mv.xyz += n * min(psz * 0.115, -mv.z * uPx / 1680.0);
+  mv.xyz += n * min(psz * 0.075, -mv.z * uPx / 1680.0);
   gl_Position = projectionMatrix * mv;
 }`,
     fragmentShader: 'void main(){ gl_FragColor = vec4(0.055, 0.049, 0.044, 1.0); }',
@@ -552,10 +550,6 @@ ${DETAIL_GLSL}`)
 // bones: 0 root  1 torso  2 head  3 armL  4 armR  5 legL/axle-front  6 legR/axle-rear  7 mount
 const P = (g, b, c, mr, x, y, z, sx, sy, sz, rx, ry, rz) =>
   ({ g, b, c, mr, m: xf(x, y, z, sx, sy, sz, rx || 0, ry || 0, rz || 0) });
-// THE PART THAT NAMES THE UNIT. The six-pixel LOD cut is right about belt buckles and wrong
-// about crests: a horsehair fin is 4 cm of geometry and it is the whole difference between
-// "a soldier" and "a man". One or two per figure, exempt from the cut (see _slots).
-const KEY = (p) => (p.key = 1, p);
 
 // pivots for a standing man
 // Proportion, not just size. At 0.345/0.40/0.615 the legs were 37% of the figure and the
@@ -672,13 +666,11 @@ const shield = (bone, x, y, z, s, rx = 0, ry = 0, rz = 0) => {
     // ladder from the planks it holds together.
     P('rim', bone, C.leatherD, M_LEATH, x, y, z + 0.004, s * 1.087, t * 1.087, 0.50, TI, ry, rz),
     P('rim', bone, 0x241a11, M_LEATH, x, y, z + s * 0.055, s * 1.045, t * 1.045, 0.34, TI, ry, rz),
-    // boss: a domed bronze cap with its own shadow collar — the brightest pixel on the figure,
-    // and a bright pip in the middle of a dark-rimmed disc is what says SHIELD at ten pixels.
-    // Exempt from the LOD cut with the device below: those two are the blazon.
+    // boss: a domed bronze cap with its own shadow collar — the brightest pixel on the figure
     P('cyl', bone, 0x241a11, M_LEATH, x, y, z + s * 0.21, s * 0.34, 0.018, s * 0.34, TI + PI2, ry, rz),
-    KEY(P('sph', bone, C.bronze, M_MET, x, y, z + s * 0.26, s * 0.27, s * 0.27, s * 0.22, TI, ry, rz)),
+    P('sph', bone, C.bronze, M_MET, x, y, z + s * 0.26, s * 0.25, s * 0.25, s * 0.21, TI, ry, rz),
     // the device: ONE civ-coloured bar across the boards, so ownership still reads off the face
-    KEY(P('box', bone, 'B', M_CLOTH, x, y + t * 0.30, z + s * 0.20, s * 0.86, t * 0.105, s * 0.075, TI, ry, rz)),
+    P('box', bone, 'B', M_CLOTH, x, y + t * 0.30, z + s * 0.20, s * 0.86, t * 0.085, s * 0.075, TI, ry, rz),
     // four iron plank cleats, deliberately off-balance so nothing on this board is concentric
     P('sph', bone, C.iron, M_MET, x + s * 0.31, y + t * 0.30, z + s * 0.16, s * 0.085, s * 0.085, s * 0.07, TI, ry, rz),
     P('sph', bone, C.iron, M_MET, x - s * 0.33, y - t * 0.08, z + s * 0.17, s * 0.085, s * 0.085, s * 0.07, TI, ry, rz),
@@ -781,14 +773,13 @@ const DEFS = {
       P('box', 2, 0x2f2418, M_LEATH, -0.093, 0.018, 0.018, 0.032, 0.100, 0.098, 0, 0, -0.10),
       // Transverse crest — across the head, not along it. At 35 px the fore-and-aft crest
       // vanished into the helmet dome; a bar wider than the shoulders does not.
-      KEY(P('box', 2, 0x352a1c, M_LEATH, 0, 0.140, 0, 0.118, 0.030, 0.048)),   // crest socket
-      // Dyed madder, never the civ colour, and laid ACROSS the head: a fore-and-aft ridge hides
-      // inside the helmet's own outline from a 55-degree camera. MEASURED: at 0.040 x 0.094 its
-      // LOD size was 0.061 against a 0.083 cut, i.e. the one part that names this unit was
-      // switched OFF in every frame the referee has ever scored. And a BOX, not a capsule —
-      // a thin capsule is all grazing normal, so the two rim terms own every pixel of it and
-      // the crest arrives as pink piping; a bar has a flat top and takes the key at full value.
-      KEY(P('box', 2, 0x7c2417, M_CLOTH, 0, 0.176, 0, 0.216, 0.064, 0.042)),
+      P('box', 2, 0x352a1c, M_LEATH, 0, 0.140, 0, 0.100, 0.030, 0.044),        // crest socket
+      // A ROUNDED CREST, and it is NOT the civ colour. A flat fin in saturated blue on top of
+      // a helmet is a blue rectangle from every angle this camera can reach — a cap, not a
+      // crest. Horsehair is dyed madder, not woad, so it stays out of the livery read. Laid
+      // ACROSS the head and wider than the dome: from a 55-degree camera a fore-and-aft ridge
+      // hides inside the helmet's own outline, and a cross of both reads as a hat.
+      P('caps', 2, 0x9e3a2c, M_CLOTH, 0, 0.176, 0, 0.040, 0.094, 0.040, 0, 0, PI2),
       // The shield rides the FOREARM, not the air beside it: the fist is at (0,-0.213,0.014)
       // and the board's grip block now lands on it, with a strap across the arm above.
       ...shield(3, 0.048, -0.166, 0.062, 0.212, 0, 0, 0.10),
@@ -831,7 +822,7 @@ const DEFS = {
       P('box', 2, 0x35301f, M_LEATH, 0.12, 0.03, 0.01, 0.045, 0.115, 0.115),   // cheek guards
       P('box', 2, 0x35301f, M_LEATH, -0.12, 0.03, 0.01, 0.045, 0.115, 0.115),
       P('box', 2, C.leatherD, M_LEATH, 0, 0.150, -0.004, 0.032, 0.030, 0.170),
-      KEY(P('box', 2, 'B', M_CLOTH, 0, 0.180, -0.004, 0.030, 0.096, 0.170)),   // crest
+      P('box', 2, 'B', M_CLOTH, 0, 0.180, -0.004, 0.024, 0.090, 0.160),        // crest
       ...shield(3, 0.054, -0.160, 0.060, 0.198, 0, 0, 0.05),
       P('box', 3, C.leatherD, M_LEATH, 0.030, -0.144, 0.024, 0.072, 0.026, 0.072, 0, 0, 0.05),
       // SILHOUETTE GATE. Flat-black at 35 px, the spearman was the warrior: same blob, same
@@ -1183,12 +1174,9 @@ for (const k of ['warrior', 'archer', 'builder', 'settler', 'catapult']) {
   const b = DEFS[k].noLegs ? 0 : 1;
   const y0 = b ? 0.330 : 0.60, x0 = b ? -0.150 : -0.34, z0 = b ? -0.130 : -0.30;
   const hh = b ? 0.33 : 0.48;
-  // `staff` so the pole leaves with the cloth: a garrison furls its standard (see _step) and
-  // the bare stick left behind was a brown twig growing out of every townsman's back.
-  const st = [P('cyl', b, C.woodD, M_WOOD, x0, y0, z0, 0.016, hh, 0.016),
-              P('sph', b, C.bronze, M_MET, x0, y0 + hh * 0.53, z0, 0.040, 0.040, 0.040),
-              P('cyl', b, C.bronze, M_MET, x0, y0 + hh * 0.46, z0, 0.034, 0.018, 0.034)];
-  for (const q of st) { q.staff = 1; DEFS[k].parts.push(q); }
+  DEFS[k].parts.push(P('cyl', b, C.woodD, M_WOOD, x0, y0, z0, 0.016, hh, 0.016));
+  DEFS[k].parts.push(P('sph', b, C.bronze, M_MET, x0, y0 + hh * 0.53, z0, 0.040, 0.040, 0.040));
+  DEFS[k].parts.push(P('cyl', b, C.bronze, M_MET, x0, y0 + hh * 0.46, z0, 0.034, 0.018, 0.034));
   DEFS[k].flags.push({ b, x: x0, y: y0 + hh * 0.36, z: z0, sx: 0.132, sy: 0.079, ry: 0.42 });
 }
 
@@ -1220,15 +1208,10 @@ const doorway = (x, y, z, w, h, jamb = C.stoneL, d = 0.05) => [
 // of bare dirt under a prop reads as a decal blob however dark it is — the review's phrase, on
 // the farms and again on the quarry. Both skirts get an irregular outline and the outer one is
 // barely proud of the ground, so what the eye gets is trodden earth spilling out from a base.
-// TRODDEN EARTH, AND IT HAS TO STAY EARTH THROUGH THE GRADE. Authored at sat 0.43 these
-// skirts arrived on screen (tools/_u4px.mjs) at sat 0.24 — a neutral warm grey — and a
-// neutral grey disc ringed by saturated grass reads MAUVE, which is the "purple slab under
-// the wonder prop" the review boxed at Calyx. Dirt is chromatic: carry the extra chroma in
-// the albedo so what survives the ambient and the tone curve is still brown.
 const apron = (r, y = 0.010) => [
-  tag(wobble(taper(G.cyl.clone(), 0.55, -0.5, 0.5), 0.075, ((r * 1000) | 0) + 3), 0x51381e, M_SOIL,
+  tag(wobble(taper(G.cyl.clone(), 0.55, -0.5, 0.5), 0.075, ((r * 1000) | 0) + 3), 0x483b29, M_SOIL,
     xf(0, y + 0.018, 0, r * 1.80, 0.150, r * 1.80)),
-  tag(wobble(taper(G.cyl.clone(), 0.40, -0.5, 0.5), 0.105, ((r * 1700) | 0) + 11), 0x5e4326, M_SOIL,
+  tag(wobble(taper(G.cyl.clone(), 0.40, -0.5, 0.5), 0.105, ((r * 1700) | 0) + 11), 0x54462f, M_SOIL,
     xf(0, y - 0.014, 0, r * 2.20, 0.100, r * 2.20)),
 ];
 // a shuttered window: reveal + sill + a lit pane set back, never a flat emissive sticker
@@ -2123,7 +2106,6 @@ class Puffs {
 //      colour, one crisp rim — that sits inside the tile instead of an aliased ellipse cutting
 //      across it. Replaces the ring decal entirely.
 //   2  WAKE. A stretched foam ellipse for hulls.
-//   3  SUN-ALIGNED CONTACT SHADOW.
 const DECAL_V = `
 attribute vec4 aCol; attribute vec2 aMode;
 varying vec2 vUv; varying vec3 vCol; varying float vMode, vK;
@@ -2142,16 +2124,11 @@ float hexd(vec2 p){
 void main(){
   vec2 d = vUv - 0.5;
   if (vMode < 0.5) {
-    // --- contact AO. Plateau then feather.
-    // MEASURED (tools/_u5ab.mjs, decals forced opaque): with the plateau ending at 0.30 of the
-    // radius, every texel this camera can SEE was in the feather — the dark core sits under the
-    // caster's own footprint and the caster is standing on it. Nine reviews in a row have said
-    // "nothing is grounded" about a layer that was drawing perfectly and hiding all of its
-    // value behind the thing it was grounding. The plateau now runs to 0.58 of the radius, so
-    // the darkness clears the boots and the wall footing and lands on ground the eye is on.
+    // --- contact AO. Plateau then feather: the caster's own footprint is fully dark and only
+    // the penumbra ramps, so there is no lit gap between the boots and the darkest texel.
     float r = length(d * 2.0);
-    float a = 1.0 - smoothstep(0.58, 1.0, r);
-    a = a * (0.62 + 0.38 * a) * vK;
+    float a = 1.0 - smoothstep(0.30, 1.0, r);
+    a = a * (0.55 + 0.45 * a) * vK;
     if (a < 0.006) discard;
     #ifdef MUL
       gl_FragColor = vec4(mix(vec3(1.0), vCol, a), 1.0);
@@ -2167,6 +2144,30 @@ void main(){
     float a = (fill * 0.16 + rim * 0.20) * vK;
     if (a < 0.006) discard;
     gl_FragColor = vec4(vCol * (0.70 + 0.55 * rim), a);
+  } else if (vMode > 3.5) {
+    // --- TEAM BASE DISC. Civ's answer to "a player cannot find the unit": a hard-edged oval
+    // of pure ownership colour under the feet, dark-stroked so it never welds to the ground it
+    // is lying on. Two-tone — a bright rim and a sunk fill — because a single flat ellipse is
+    // a poker chip, and the rim is what survives when the disc is thirty pixels across.
+    float r = length(d * 2.0);
+    float w = fwidth(r) * 0.9 + 0.012;
+    float disc = 1.0 - smoothstep(1.0 - w, 1.0, r);
+    // The ring was 34% of the radius wide — an opaque livery DONUT the size of the soldier,
+    // which is what the eye was actually finding at gameplay zoom. A rim is a rim: 16%.
+    float fill = 1.0 - smoothstep(0.84 - w, 0.84, r);
+    float ink  = 1.0 - smoothstep(0.92 - w, 0.92, r);
+    vec3 col = mix(vCol * 1.15, vCol * 0.55, fill);
+    col = mix(vec3(0.045, 0.040, 0.036), col, ink);       // 1 px dark outer stroke
+    // The RING carries the read; the fill is a wash. A solid opaque ellipse of livery under a
+    // soldier is a puddle the size of his hex — it out-reads the model it is supposed to be
+    // pointing at, which is the same mistake as the badge.
+    // Round 8: 0.46 of saturated livery across a 0.8-unit ellipse measured LOUDER than the
+    // soldier standing on it — at gameplay zoom the eye found a blue puddle first and the
+    // model second. The RING is the ownership read; the fill is now a wash you notice only
+    // after you have already read the figure, and the contact AO under it carries the ground.
+    float a = (fill * 0.14 + (disc - fill) * 0.68) * vK;
+    if (a < 0.01) discard;
+    gl_FragColor = vec4(col, a);
   } else if (vMode < 2.5) {
     // --- V wake. Two foam arms opening astern from the hull plus the churn right behind the
     // stern, the whole thing decaying quadratically so it is gone by three hex lengths.
@@ -2188,15 +2189,10 @@ void main(){
     float x = (vUv.x - 0.5) * 2.0;
     float wid = 1.0 - 0.30 * t;                       // narrows as it runs out
     float r = abs(x) / wid;
-    // A SHADOW HOLDS ITS VALUE AND THEN ENDS. The old ramp started fading at t 0.05 — five
-    // percent of the way out — so by the time the wedge cleared the caster's own silhouette it
-    // was down to a fifth of its value and the only part of it the camera could see was the
-    // part that had already faded. It now holds to just past half its run and dies in the last
-    // third, which is what an umbra with a penumbra on the end of it looks like.
-    float body = (1.0 - smoothstep(0.40, 1.0, r)) * (1.0 - smoothstep(0.52, 1.06, t));
+    float body = (1.0 - smoothstep(0.18, 1.0, r)) * (1.0 - smoothstep(0.05, 1.0, t));
     // the contact wedge itself: small, nearly opaque, hard against the boots
     float core = 1.0 - smoothstep(0.10, 0.70, length(vec2(x * 1.15, (t - 0.04) * 2.1)));
-    float a = clamp(body * 1.02 + core * 0.75, 0.0, 1.0) * vK;
+    float a = clamp(body * 0.82 + core * 1.05, 0.0, 1.0) * vK;
     if (a < 0.006) discard;
     #ifdef MUL
       gl_FragColor = vec4(mix(vec3(1.0), vCol, a), 1.0);
@@ -2248,18 +2244,11 @@ class Decals {
 // the name is ellipsised to fit it, so every plate in the game is one shape; _plateFade then
 // pins that shape to a fixed fraction of a hex on screen whatever the camera is doing.
 const PL = { W: 512, H: 176, X: 46, Y: 10, BW: 420, BH: 112, HEX: 1.25 };
-// `k` is the RESOLUTION MATCH. The plate is authored in one fixed 512x176 coordinate system
-// and then drawn onto a canvas k times that size, so the texture can be rebuilt at whatever
-// the sprite actually covers on screen. Shipped at k=1 the bar was 420 canvas texels shown
-// across ~170 screen pixels: a 2.5x minification, i.e. every label in the game was being read
-// out of mip 1.3 with the transparent surround bleeding into its edges. That is the "blurry
-// world-space quad" — nothing to do with TAA. _plateFade re-solves k as the camera moves.
-function plateTexture(name, pop, prod, team, k = 1) {
+function plateTexture(name, pop, prod, team) {
   const { W, H, X: x0, Y: y0, BW: w, BH: h } = PL;
   const cv = document.createElement('canvas');
-  cv.width = Math.round(W * k); cv.height = Math.round(H * k);
+  cv.width = W; cv.height = H;
   const g = cv.getContext('2d');
-  g.scale(k, k);
   const r = 13;
   const round = (x, y, ww, hh, rr) => {
     g.beginPath(); g.moveTo(x + rr, y);
@@ -2270,10 +2259,7 @@ function plateTexture(name, pop, prod, team, k = 1) {
   // outline the plate dissolves into a red roof or a lit field the moment it crosses one.
   g.shadowColor = 'rgba(0,0,0,0.45)'; g.shadowBlur = 10; g.shadowOffsetY = 7;
   const body = g.createLinearGradient(0, y0, 0, y0 + h);
-  // OPAQUE. At 0.95 the lit hillside behind the label came through the bar as olive and tan
-  // blotches — five per cent of a very bright ground is still a mottle on something this dark,
-  // and a label you can see the map through is not UI, it is a decal.
-  body.addColorStop(0, 'rgba(30,34,43,1)'); body.addColorStop(1, 'rgba(12,15,20,1)');
+  body.addColorStop(0, 'rgba(32,36,45,0.95)'); body.addColorStop(1, 'rgba(13,16,21,0.95)');
   g.fillStyle = body; round(x0, y0, w, h, r); g.fill();
   g.shadowColor = 'transparent';
   // team chip with the population
@@ -2322,7 +2308,7 @@ function plateTexture(name, pop, prod, team, k = 1) {
   g.beginPath(); g.moveTo(W / 2 - 3, by); g.lineTo(W / 2 - 3, by + 24); g.stroke();
   const t = new THREE.CanvasTexture(cv);
   t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
-  t.frac = w / W; t.k = k;
+  t.frac = w / W;
   return t;
 }
 
@@ -2513,13 +2499,11 @@ export class Units {
       // soldier at 1.05 therefore stood 36 px tall — a green lump the size of a bush, which is
       // exactly what the review measured. 1.66 puts the body at ~57 px and a pike tip at ~85,
       // i.e. 0.55 hex, the reference's reading size. Everything else follows the same ratio.
-      // Every one of those numbers was the UN-FORESHORTENED projection, which is why the cast
-      // kept growing while the frame kept reading as clay: the figure really on screen was a
-      // quarter of it. With the lean sign fixed (see _step) a foot soldier at 1.85 measures
-      // ~56 real px of standing height against a 133 px hex — 0.42 of a hex, Civ's reading
-      // size — and stops out-massing the watchtower he is garrisoning. A rider is already
-      // 1.30 tall before scale, and a cart reads on its horizontal, so neither moves.
-      scale: (spec.scale ?? 1) * (def.boat ? 1.72 : def.wheels ? 1.98 : def.mounted ? 1.95 : 1.85),
+      // Round 8, MEASURED (tools/_upx.mjs): at the shipped framing a hex spans 106 px centre
+      // to centre and a foot soldier at 1.66 projected 44 px of height — 0.41 of a hex, which
+      // is the "I cannot find the units" verdict. 2.20 puts him at ~58 px, i.e. 0.55 hex, the
+      // reference's reading size. A rider is already 1.30 tall before scale, so he needs less.
+      scale: (spec.scale ?? 1) * (def.boat ? 1.72 : def.wheels ? 1.98 : def.mounted ? 1.95 : 2.55),
     };
     u.tYaw = u.yaw;
     for (let i = 0; i < 8; i++) u.bone.push(new THREE.Matrix4());
@@ -3239,16 +3223,6 @@ export class Units {
           const e = p.m.elements;
           const a = [Math.hypot(e[0], e[1], e[2]), Math.hypot(e[4], e[5], e[6]), Math.hypot(e[8], e[9], e[10])].sort((x, y) => y - x);
           p._sz = Math.max(Math.sqrt(a[0] * a[1]), a[0] * 0.46);
-          // MASS, not extent. A helmet dome is big on all three axes; a brow band is a wide
-          // hoop 4 cm thick. The value ladder below has to tell those apart, because the
-          // accent band belongs to the TRIM and the dome is a mass.
-          p._vol = Math.cbrt(a[0] * a[1] * a[2]);
-          // A crest is 4 cm of horsehair and the six-pixel cut ate it at every gameplay
-          // distance — which is why the panel portrait reads as a warrior and the man on the
-          // board reads as a pale ball. The parts that NAME a unit are exempt: they are two
-          // per figure, they are the last thing to go, and without them the LOD is drawing a
-          // silhouette nobody can name.
-          if (p.key) p._sz = Math.max(p._sz, 0.20);
         }
         const s = pr.n++;
         u.slots[i] = s;
@@ -3283,20 +3257,13 @@ export class Units {
         // read needs the accent as much as it needs the mass, so polished metal is centred a
         // band and a half above everything else and is the only thing allowed near the top.
         const met = z === 2 || z === 11;
-        // THE ACCENT IS A RIM, NOT A MASS. Measured off the shipped frame: a warrior's helm
-        // dome is the single largest part above the belt and it was sitting at the TOP of the
-        // value ladder, so every soldier on the board read as a pale egg with a blue skirt —
-        // the review's "unnameable blue-tan clump", in one number. A cuirass and a dome are
-        // mass and belong in the mid band; the brow band, the boss, the pauldron caps and the
-        // blade are trim, they are what glints, and they keep the accent to themselves.
-        const bigMet = met && p._vol > 0.12;
         // THREE HARD BANDS, and which band a part lands in is decided by WHERE IT IS, not only
         // by what it is made of. At forty pixels the eye reads a figure as a stack of three
         // values top to bottom: a bright crown, a mid mass, a dark base. Polished metal owns
         // the accent, the legs and boots own the floor, everything else is the mass — and the
         // head gets half a band of lift on top so the silhouette always has a light top.
         const lo = p.b === 5 || p.b === 6;
-        const cen = (met ? (bigMet ? 0.455 : 0.615) : lo ? 0.11 : 0.375) + (p.b === 2 && !met ? 0.075 : 0) + gnd * 0.20;
+        const cen = (met ? 0.615 : lo ? 0.11 : 0.375) + (p.b === 2 && !met ? 0.075 : 0) + gnd * 0.20;
         // Metal gets a NARROW band, not a big one: it is already the brightest thing in the
         // frame once the spec lobe is on it, and stretching pale steel the same way as wool put
         // a blown-white pickaxe head in the middle of the board.
@@ -3306,11 +3273,7 @@ export class Units {
         // mass on the figure — bigger than the helmet, brighter than the shield boss — and the
         // eye lands on a shirt instead of on a soldier. Cloth, leather and skin top out below
         // the polished-metal ceiling, so the hierarchy is bronze > cloth > wool > boots.
-        // 0.84 was above the brief's accent (0.65) and a raked steel blade lit by the key
-        // landed on screen as a near-white 40 px streak beside every warrior — a blown
-        // highlight the eye reads as an artefact, not as a sword. 0.70 keeps polished metal
-        // the top of the value ladder (cloth caps at 0.60) without clipping.
-        const cap = met ? (bigMet ? 0.55 : 0.70) : lo ? 0.26 : 0.60;
+        const cap = met ? 0.84 : lo ? 0.26 : 0.60;
         _c.setHSL(_hsl.h, _hsl.s, THREE.MathUtils.clamp(l, 0.05, cap), THREE.SRGBColorSpace);
         pr.mesh.setColorAt(s, _c);
         // roughness rides the same lot: a scuffed helmet and a polished one in the same file
@@ -3446,14 +3409,11 @@ export class Units {
       // The settlement's own occlusion: the ground a town stands on never sees the sky.
       const s = (c.foot ?? 0.8) * 2.20;
       _m.compose(_v.set(c.x, c.y + 0.055, c.z), _q2.identity(), _s.set(s, 1, s));
-      this.shadows.push(_m, AO_MUL, 0.22, 0);
+      this.shadows.push(_m, AO_MUL, 0.13, 0);
       // and the town's own bulk throws a shadow off its down-sun side: without it a walled
       // capital reads as a model kit placed on a photograph of a hill.
-      // The acceptance test the art bible writes for this: the terrace directly downsun of a
-      // keep reads 45-55% darker than the lit terrace beside it. 0.14 of a 0.325 multiply is
-      // 9%, which is why the referee has scored this frame as having no shadows at all.
       this._shade(c.x, c.y + 0.060, c.z, (c.foot ?? 0.8) * (1.4 + c.tier * 0.35),
-        (c.foot ?? 0.8) * 1.15, 0.36);
+        (c.foot ?? 0.8) * 1.15, 0.14);
     }
     this._propGround();
     // Static contact patches — the pier, the yards. A dock stands on water, and water does not
@@ -3495,7 +3455,7 @@ export class Units {
         // curtain wall wearing a 1.2-wide disc reads as a moat, not as a wall standing on dirt.
         _m.compose(_v.set(x, p[1] + 0.020, z), _q.setFromEuler(_e.set(0, p[6], 0)),
           _s.set(rx * 2.1, 1, rz * 2.1));
-        this.shadows.push(_m, PROP_MUL, flat ? 0.24 : 0.42, 0);
+        this.shadows.push(_m, PROP_MUL, flat ? 0.20 : 0.34, 0);
         if (flat || h <= 0.26) continue;
         // The cast shadow is as wide as the caster's silhouette ACROSS the sun, so a wall
         // throws a wall-shaped shadow and a tower throws a tower-shaped one.
@@ -3506,7 +3466,7 @@ export class Units {
         // a 1.9-unit watchtower, so the tallest thing on the board had no more presence on the
         // ground than a hut. Tall casters reach across the next hex under a low sun; the cap only
         // exists because a flat quad cannot follow relief for ever.
-        this._shade(x, p[1] + 0.026, z, h, w * 0.92, 0.74, THREE.MathUtils.clamp(h * 1.10, 0.35, 2.45), PROP_MUL);
+        this._shade(x, p[1] + 0.026, z, h, w * 0.92, 0.66, THREE.MathUtils.clamp(h * 1.10, 0.35, 2.45), PROP_MUL);
       }
     }
   }
@@ -3559,20 +3519,6 @@ export class Units {
       c.pfade = c.pfade === undefined ? want : c.pfade + (want - c.pfade) * Math.min(1, dt / 0.12);
       sp.material.opacity = c.pfade;
       sp.visible = c.pfade > 0.02;
-      // ---- RESOLUTION MATCH. `hw` is already the real half-width of the BAR in device
-      // pixels, so hw*2/frac is what one canvas width covers on screen. Redraw the label at
-      // that size when it drifts more than a quarter off, and the text is sampled at 1:1
-      // instead of out of a mip. Log hysteresis, so a slow zoom cannot thrash the canvas.
-      if (sp.visible && hw > 8) {
-        const kw = THREE.MathUtils.clamp((hw * 2 / frac) * (window.devicePixelRatio || 1) / PL.W, 0.25, 1.6);
-        const cur = sp.material.map?.k ?? 1;
-        if (Math.abs(Math.log(kw / cur)) > 0.22) {
-          const old = sp.material.map;
-          sp.material.map = plateTexture(c.name, c.pop, c.prod, c.team, kw);
-          sp.material.needsUpdate = true;
-          old?.dispose();
-        }
-      }
     }
   }
 
@@ -3650,10 +3596,7 @@ export class Units {
         const cam = this.camera;
         const b = cam ? Math.atan2(cam.position.x - tp.x, cam.position.z - tp.z) : 0;
         const a = b + (n > 1 ? (u.si / (n - 1) - 0.5) * 1.10 : (u.seed % 3 - 1) * 0.26);
-        // 0.60 of a 0.866 inradius still left him among the barns; 0.80 puts him at the kerb,
-        // in front of everything on the tile, and it is the last radius that stays inside the
-        // hex on every heading so the grid stroke is never straddled.
-        tx += Math.sin(a) * 0.80; tz += Math.cos(a) * 0.80;
+        tx += Math.sin(a) * 0.60; tz += Math.cos(a) * 0.60;
       } else if (n > 1) {
         const a = (u.si / n) * Math.PI * 2 + (u.q + u.r) * 0.9;
         tx += Math.cos(a) * 0.42; tz += Math.sin(a) * 0.42;
@@ -3676,14 +3619,13 @@ export class Units {
     const wantS = this._platAt.has(u.q * 4096 + u.r) ? 0.82 : 1;
     u.ds = u.ds === undefined ? wantS : u.ds + (wantS - u.ds) * Math.min(1, dt * 2.5);
     let usc = u.scale * u.ds;
-    // MIN_PX is measured on the un-foreshortened vertical. An upright figure keeps ~0.82 of
-    // that through the projection, so 62 here is ~51 real pixels of standing figure — the
-    // floor under which a silhouette stops being nameable. It used to be 96 against a
-    // measured 0.26 survival rate, i.e. a floor of 25 px that no boost could ever reach.
+    // MIN_PX is measured on the un-foreshortened vertical: at this camera pitch a world-up
+    // segment lands on screen at ~0.50 of its projected length, so 96 here is ~48 real pixels
+    // of standing figure — the floor under which a silhouette stops being nameable.
     if (this._pxk && this.camera) {
       const dd = Math.hypot(this.camera.position.x - u.x, this.camera.position.y - u.y, this.camera.position.z - u.z);
       const proj = (d.h || 0.85) * usc * this._pxk / Math.max(dd, 1e-3);
-      usc *= THREE.MathUtils.clamp(62 / proj, 1, 1.6);
+      usc *= THREE.MathUtils.clamp(96 / proj, 1, 1.9);
     }
 
     const w = u.walk, idle = 1 - w;
@@ -3726,25 +3668,18 @@ export class Units {
     // pose leans a little back, which on a 40-degree camera turns a bald scalp into a chest,
     // a tabard and a face — the difference between a figure and a shoulder-blob seen from above.
     if (atk || !d.boat) _q.multiply(_q2.setFromEuler(_e.set(0.30 * atk - (d.boat ? 0 : 0.14), 0, 0)));
-    // ---- TIP THE LONG AXIS BACK INTO THE IMAGE PLANE. At a 55-degree pitch a standing figure
-    // is only 35 degrees off the optical axis and projects as its own plan view: a helmet lid,
-    // two shoulders and a shield lying flat. Rotating it about the horizontal axis across the
-    // view by the camera's excess pitch swings that axis back toward perpendicular and the plan
-    // becomes an elevation — crest, face, tabard, belt, boots stacked vertically in screen
-    // space, feet still on the pivot. How far is a function of how far DOWN the camera looks:
-    // at the gameplay notch it needs 17 degrees, at portrait range almost nothing.
+    // ---- LEAN INTO THE CAMERA. At a 62-degree pitch a standing figure projects as its own
+    // plan view: shoulders, cloak and a shield lying flat, which is the "unreadable blob"
+    // every review has named. Tipping the figure 17 degrees toward the lens about the
+    // horizontal axis across the view turns that plan back into an elevation — helmet, chest,
+    // belt and boots stacked vertically in screen space — without moving the feet, which stay
+    // on the pivot. It is what Civ does and it costs one quaternion.
+    // How far to tip is a function of how far DOWN the camera is looking: at the gameplay
+    // notch (55 degrees) a figure needs 17 to stand up again, at portrait range (~40) it needs
+    // almost nothing and a fixed angle would just make it look drunk.
     if (!d.boat && this._lean > 0.01) {
       const b = Math.atan2(this.camera.position.x - u.x, this.camera.position.z - u.z);
-      // SIGN. Measured (tools/_u3q.mjs): with +lean the warrior's own spine projected 19 px of
-      // screen height on a 133 px hex — head 15 px above the boots and 12 px to the side, i.e.
-      // the figure was drawn lying on its back, which is the whole of "unnameable clay" and
-      // both of the "interpenetrating wedges floating over the river" the review boxed. A man
-      // is TALL: his read axis is vertical and tipping it INTO the lens aligns it with the
-      // optical axis, so it foreshortens to nothing. He has to recline AWAY. A cart and a horse
-      // are LONG: their read axis is already square to the view, so the same rotation stands
-      // their flanks and wheels up instead and they keep the sign they had.
-      const ln = (d.mounted || d.wheels) ? this._lean : -this._lean;
-      _q.premultiply(_q2.setFromAxisAngle(_v2.set(Math.cos(b), 0, -Math.sin(b)), ln));
+      _q.premultiply(_q2.setFromAxisAngle(_v2.set(Math.cos(b), 0, -Math.sin(b)), this._lean));
     }
     u.atkS = atk;
     root.compose(_v.set(u.x + Math.sin(u.yaw) * 0.26 * atk * usc, u.y + bobY - (d.boat ? 0 : 0.022),
@@ -3813,10 +3748,9 @@ export class Units {
     const cut = (cam && this._pxk)
       ? 6.0 * Math.hypot(cam.position.x - u.x, cam.position.y - u.y, cam.position.z - u.z) / (this._pxk * usc)
       : 0;
-    const furled = (u.ds ?? 1) <= 0.85;
     for (let i = 0; i < parts.length; i++) {
       const p = parts[i];
-      if (p._sz < cut || (p.staff && furled)) { this.prim[p.g].mesh.setMatrixAt(u.slots[i], _m0); continue; }
+      if (p._sz < cut) { this.prim[p.g].mesh.setMatrixAt(u.slots[i], _m0); continue; }
       const bm = p.b === 0 ? root : bones[p.b];
       _m.multiplyMatrices(bm, p.m);
       this.prim[p.g].mesh.setMatrixAt(u.slots[i], _m);
@@ -3852,17 +3786,19 @@ export class Units {
       // and a tight occlusion disc right at the soles. The sun-aligned wedge above says WHERE
       // the light is; this says the boots are touching. Without both, a figure reads as a
       // sticker with a shadow painted next to it.
-      // 0.45 of the hex circumradius, per the brief: a plateau under the boots feathered to
-      // nothing at the rim, MULTIPLYING the ground so it carries the terrain's own hue and can
-      // never be the grey (or worse, blue) puddle five reviews have drawn a box around.
-      _m.compose(_v.set(u.x, base + 0.026, u.z), _q2.identity(), _s.set(w * 2.00, 1, w * 2.00));
-      this.shadows.push(_m, AO_MUL, dk * 0.74 * (1 - lift), 0);
-      // NO BASE SLAB, NO TEAM RING. The livery disc that used to sit on top of this AO is the
-      // "pale pad" and the "brown ring" the review drew a box around in two separate places:
-      // 0.68 alpha of saturated civ colour in an ellipse the width of the soldier reads as a
-      // poker chip glued to the ground, and it out-massed the model it was pointing at. The
-      // ownership read lives where heraldry puts it — the mantle, the shield face and the
-      // pennant — and grid.js already paints the territory band on these same edges.
+      // 0.55 of the hex inradius, per the brief: plateau under the boots, feathered to nothing
+      // at the rim, MULTIPLYING the ground so it carries the terrain's own hue and can never be
+      // the grey (or worse, blue) puddle five reviews have drawn a box around.
+      _m.compose(_v.set(u.x, base + 0.026, u.z), _q2.identity(), _s.set(w * 1.72, 1, w * 1.72));
+      this.shadows.push(_m, AO_MUL, dk * 0.80 * (1 - lift), 0);
+      // ---- and the owner's disc on top of it. This is the single cue the review said was
+      // missing outright: 60 x 36 px of the civ's own blue under a 57 px soldier, so the eye
+      // lands on the unit before it lands on the badge, and green-on-green cannot happen.
+      _m.compose(_v.set(u.x, base + 0.034, u.z), _q2.identity(), _s.set(w * 1.55, 1, w * 1.55));
+      this.decals.push(_m, u.team.disc ?? u.team.flag, dk * (1 - lift) * (u.sel ? 1.0 : 0.80), 4);
+      // NO OWNERSHIP HEX. grid.js draws the territory band and the selection ring on these
+      // exact edges; a third civ-tinted hexagon under the unit is the double-stroke the
+      // review measured, and it drew at full alpha straight through the water plane.
     } else if (d.boat) {
       // CONTACT PATCH. A hull does not cast a drop shadow onto water, it sits IN it: the sea
       // right under the planking goes dark because the light never gets there. One soft
