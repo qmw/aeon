@@ -1,0 +1,22 @@
+import { chromium } from 'playwright';
+const EXE='/home/piotr/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome';
+const b=await chromium.launch({executablePath:EXE,args:['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--no-sandbox','--disable-dev-shm-usage']});
+const p=await b.newPage({viewport:{width:1600,height:900}});
+await p.goto('http://localhost:5173/',{waitUntil:'load',timeout:60000});
+await p.waitForFunction(()=>window.__ready&&(window.__frameCount||0)>=4,null,{timeout:180000}).catch(()=>{});
+console.log(JSON.stringify(await p.evaluate(()=>{
+ const rows=[];
+ window.scene.traverse(o=>{ if(!(o.isMesh||o.isInstancedMesh))return;
+  const g=o.geometry; let t=0; if(g?.index)t=g.index.count/3; else if(g?.attributes?.position)t=g.attributes.position.count/3;
+  rows.push({n:o.name||o.type,c:o.count||1,tris:Math.round(t*(o.count||1)),cast:!!o.castShadow,recv:!!o.receiveShadow,vis:o.visible,mat:o.material?.type||''});
+ });
+ rows.sort((a,b)=>b.tris-a.tris);
+ const sum=rows.reduce((s,r)=>s+(r.vis?r.tris:0),0);
+ const noCast=rows.filter(r=>!r.cast&&r.vis&&r.tris>500);
+ const sh=window.sun?null:null;
+ const S=window.scene.children.find(c=>c.isDirectionalLight)||window.scene.getObjectByProperty('isDirectionalLight',true);
+ let light=null; window.scene.traverse(o=>{if(o.isDirectionalLight)light={int:o.intensity,col:o.color.getHexString(),pos:o.position.toArray().map(n=>+n.toFixed(1)),castShadow:o.castShadow,map:o.shadow.mapSize.toArray(),bias:o.shadow.bias,nb:o.shadow.normalBias,cam:[o.shadow.camera.left,o.shadow.camera.right,o.shadow.camera.top,o.shadow.camera.bottom,o.shadow.camera.near,o.shadow.camera.far].map(n=>+n.toFixed(1))};});
+ let hemi=null; window.scene.traverse(o=>{if(o.isHemisphereLight)hemi={int:o.intensity,sky:o.color.getHexString(),gnd:o.groundColor.getHexString()};});
+ return {totalTris:sum, top:rows.slice(0,22), noCastCount:noCast.length, noCastTop:noCast.slice(0,20).map(r=>r.n+':'+r.tris), light, hemi, tri:window.renderer.info.render.triangles, calls:window.renderer.info.render.calls};
+}),null,1));
+await b.close();

@@ -1,0 +1,669 @@
+/* AEON — HUD skin.
+   One art direction: blackened bronze plate over oiled leather, gold-leaf trim, ink shadows.
+
+   Three rules do most of the work.
+
+   1. Material. Every panel is `.pl`. That is not a gradient and a keyline: it is a four-stop
+      body, a leather tooth screened over the top, an inner bevel *pair* (lit top edge / black
+      bottom edge), a gold hairline frame inset 3px with a struck bracket at each corner, and a
+      two-stage drop shadow — one hard pixel at 40% plus a 12px/8px soft fall at 25%. That last
+      part is what makes a panel *occlude* the terrain instead of hovering over it.
+   2. Grid. Every anchor comes off one safe inset (--safe) and one gutter (--gut), both multiples
+      of 2, so the bottom-left panel, the end-turn plate and the world map share their edges
+      exactly and no chip ever sits 2px from one edge and 12px from the other.
+   3. Type. Exactly two families. `--display` is the inscriptional roman hud.js generates, and it
+      is never set below 16px — a synthesised face has no hinting, and 11px is where that shows.
+      Everything else — every label, every numeral, every body string — is Liberation Sans
+      Narrow, a real hinted condensed grotesque that ships with the OS. Numerals are set in
+      fixed-width cells so a counter cannot jitter as it counts. Tracking is for caps eyebrows
+      only; body-length strings get none. Nothing is downloaded. */
+
+#hud {
+  --gold:      #e6c07c;
+  --gold-hi:   #fff0cb;
+  --gold-dim:  #a9853f;
+  --gold-deep: #63491f;
+  --ink:       #06080b;
+  --text:      #f2e9d7;
+  --label:     #bcac8c;
+  --sci:  #86d9f4;
+  --cul:  #d3a4f2;
+  --fai:  #f8e7ba;
+  --coin: #f6cd63;
+  --grow: #9adf92;
+  --war:  #e5735e;
+  --civ:  #4fa8ff;
+
+  --display: 'Aeon Display', 'Liberation Serif', 'Times New Roman', serif;
+  --caps: 'Liberation Sans Narrow', 'Arial Narrow', 'Helvetica Neue Condensed', 'Ubuntu Condensed', system-ui, sans-serif;
+
+  --safe: 22px;
+  --gut: 14px;
+
+  /* Two procedural films. `grain` is the leather tooth, `fibre` the long directional pull of a
+     rolled hide. Screened, not overlaid: on a panel this dark, overlay is invisible and screen
+     is what actually lifts the tooth out of the black. */
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='256' height='256'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.72' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='256' height='256' filter='url(%23n)'/%3E%3C/svg%3E");
+  --fibre: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='256' height='256'%3E%3Cfilter id='f'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.014 0.62' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='256' height='256' filter='url(%23f)'/%3E%3C/svg%3E");
+  /* Hammered bronze for header strips and the end-turn plate: a fine cross-hatch of dents. */
+  --hammer: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='128' height='128'%3E%3Cfilter id='h'%3E%3CfeTurbulence type='turbulence' baseFrequency='0.42' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='128' height='128' filter='url(%23h)'/%3E%3C/svg%3E");
+
+  position: fixed; inset: 0; z-index: 10;
+  pointer-events: none;
+  font-family: var(--caps);
+  font-size: 13px;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+#hud * { box-sizing: border-box; }
+#hud button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+/* Every numeral in the HUD. Condensed grotesque, lining, fixed-width cells at the call site so
+   100/100 and 3/3 do not shuffle the layout as they change. */
+#hud .num {
+  font-family: var(--caps); font-variant-numeric: tabular-nums lining-nums;
+  font-weight: 700; letter-spacing: .012em; font-feature-settings: 'tnum' 1;
+}
+#hud .lbl {
+  font-family: var(--caps); font-size: 10.5px; line-height: 1.15; font-weight: 700;
+  letter-spacing: .16em; text-transform: uppercase; color: var(--label);
+  text-shadow: 0 1px 0 rgba(20,16,11,.8);
+}
+/* Display roman: names and titles only, never under 16px. */
+#hud h2, #hud .crest b, #hud .sel .nm, #hud .endturn b, #hud .detail .dt b, #hud .eracol b {
+  font-family: var(--display); font-weight: 400; letter-spacing: .01em;
+}
+
+/* ------------------------------------------------------------------ icon plate
+   Three passes of one path: a fat dark keyline behind the shape so it survives on a bright
+   hillside, a rim light one unit below it, then the shape in currentColor. */
+#hud .ico { display: block; width: 100%; height: 100%; overflow: visible; }
+#hud .ico .k { fill: rgba(20,16,11,.72); stroke: rgba(20,16,11,.72); stroke-width: 2.1; stroke-linejoin: round; stroke-linecap: round; }
+#hud .ico .r { fill: rgba(255,246,220,.42); transform: translateY(.9px); }
+#hud .ico .f { fill: currentColor; }
+
+/* ------------------------------------------------------------------ scrims */
+#hud .scrim { position: absolute; left: 0; right: 0; pointer-events: none; }
+/* Each scrim dies at its OWN panel edge. The old pair ran 150px of 0.88 black into the
+   mountains and 250px of 0.76 into the near field: two matched tan strips 700px apart both
+   lost 56% of their exposure, which inverted aerial perspective and halved the near field's
+   measured detail on the delivered PNG. A scrim backs type off the board; it is not a grade. */
+#hud .scrim.t { top: 0; height: 70px; background: linear-gradient(180deg, rgba(5,7,10,.42), transparent); }
+#hud .scrim.b { bottom: 0; height: 120px; background: linear-gradient(0deg, rgba(5,7,10,.34), transparent); }
+
+/* ------------------------------------------------------------------ panel material */
+#hud .pl {
+  position: relative;
+  border: 1px solid rgba(20,16,11,.92);
+  background:
+    linear-gradient(177deg, rgba(72,61,45,.94) 0%, rgba(45,38,28,.95) 26%, rgba(26,22,17,.96) 62%, rgba(13,11,8,.975) 100%),
+    radial-gradient(128% 88% at 50% -26%, rgba(255,228,172,.15), transparent 60%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,244,216,.13),
+    inset 0 -1px 0 rgba(20,16,11,.88),
+    inset 0 -34px 40px -30px rgba(20,16,11,.9),
+    0 1px 0 rgba(20,16,11,.4),
+    0 12px 8px -6px rgba(20,16,11,.25),
+    0 26px 46px -16px rgba(20,16,11,.55);
+  backdrop-filter: blur(7px) saturate(1.12) brightness(.84);
+  -webkit-backdrop-filter: blur(7px) saturate(1.12) brightness(.84);
+  pointer-events: auto;
+}
+#hud .pl::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background-image: var(--grain), var(--fibre);
+  background-size: 148px 148px, 260px 260px;
+  background-blend-mode: overlay;
+  mix-blend-mode: screen; opacity: .13;
+}
+/* Frame: a gold hairline inset from the edge, with a struck bracket at each corner. Eight static
+   background layers — the cheapest ornament that still reads as a sculpted surround. */
+#hud .pl::after {
+  content: ''; position: absolute; inset: 3px; pointer-events: none;
+  border: 1px solid rgba(230,192,124,.19);
+  box-shadow: inset 0 1px 0 rgba(255,240,205,.09), 0 1px 0 rgba(20,16,11,.45);
+  background:
+    linear-gradient(var(--gold-dim),var(--gold-dim)) 0 0/11px 2px no-repeat,
+    linear-gradient(var(--gold-dim),var(--gold-dim)) 0 0/2px 11px no-repeat,
+    linear-gradient(var(--gold-dim),var(--gold-dim)) 100% 0/11px 2px no-repeat,
+    linear-gradient(var(--gold-dim),var(--gold-dim)) 100% 0/2px 11px no-repeat,
+    linear-gradient(var(--gold-dim),var(--gold-dim)) 0 100%/11px 2px no-repeat,
+    linear-gradient(var(--gold-dim),var(--gold-dim)) 0 100%/2px 11px no-repeat,
+    linear-gradient(var(--gold-dim),var(--gold-dim)) 100% 100%/11px 2px no-repeat,
+    linear-gradient(var(--gold-dim),var(--gold-dim)) 100% 100%/2px 11px no-repeat;
+  opacity: .62;
+}
+/* Header ornament: a hammered bronze strip with a bead at each end and a bevel pair. Every panel
+   that has a title gets one, which is what tells the eye where a panel begins. */
+#hud .mstrip, #hud .sel .hdr, #hud .thdr, #hud .mhdr {
+  position: relative; display: flex; align-items: center; gap: 8px;
+  background:
+    var(--hammer),
+    linear-gradient(180deg, #5d4f36 0%, #3a3122 38%, #221c12 62%, #4a3f2a 100%);
+  background-size: 128px, auto;
+  background-blend-mode: soft-light, normal;
+  box-shadow: inset 0 1px 0 rgba(255,238,196,.22), inset 0 -1px 0 rgba(20,16,11,.85), 0 1px 0 rgba(20,16,11,.5);
+  border-bottom: 1px solid rgba(20,16,11,.8);
+}
+#hud .mstrip::after, #hud .sel .hdr::after, #hud .mhdr::after {
+  content: ''; position: absolute; inset: 0 6px; pointer-events: none;
+  background:
+    radial-gradient(circle at 3px 50%, rgba(246,224,170,.8) 0 1.1px, rgba(20,16,11,.5) 1.4px, transparent 2.2px) left/8px 100% no-repeat,
+    radial-gradient(circle at calc(100% - 3px) 50%, rgba(246,224,170,.8) 0 1.1px, rgba(20,16,11,.5) 1.4px, transparent 2.2px) right/8px 100% no-repeat;
+}
+
+/* ================================================================== top bar */
+#hud .top {
+  position: absolute; top: 0; left: 0; right: 0; height: 54px;
+  display: flex; align-items: stretch; justify-content: space-between; padding: 0 var(--safe);
+  pointer-events: auto;
+  background:
+    var(--hammer),
+    linear-gradient(180deg, rgba(48,41,30,.96) 0%, rgba(28,24,18,.94) 40%, rgba(15,13,10,.95) 78%, rgba(9,8,6,.97) 100%),
+    radial-gradient(64% 220% at 50% 0, rgba(255,226,170,.13), transparent 70%);
+  background-size: 96px, auto, auto;
+  background-blend-mode: soft-light, normal, normal;
+  border-bottom: 1px solid rgba(20,16,11,.95);
+  box-shadow: inset 0 1px 0 rgba(255,240,205,.13), inset 0 -3px 0 -1px rgba(230,192,124,.20), 0 1px 0 rgba(20,16,11,.4), 0 12px 8px -6px rgba(20,16,11,.25), 0 22px 40px rgba(20,16,11,.4);
+  backdrop-filter: blur(8px) saturate(1.1) brightness(.9);
+  -webkit-backdrop-filter: blur(8px) saturate(1.1) brightness(.9);
+}
+#hud .top::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: -4px; height: 4px; pointer-events: none;
+  background: linear-gradient(180deg, rgba(20,16,11,.5), transparent);
+}
+#hud .top .grp { display: flex; align-items: stretch; position: relative; }
+#hud .top .grp > * + * { border-left: 1px solid rgba(20,16,11,.62); box-shadow: -1px 0 0 rgba(232,204,152,.07) inset; }
+
+#hud .crest { display: flex; align-items: center; gap: 10px; padding: 0 16px 0 0; }
+#hud .crest .ico { width: 23px; height: 23px; color: var(--gold); filter: drop-shadow(0 1px 1px rgba(20,16,11,.7)); }
+#hud .crest b {
+  font-size: 19px; letter-spacing: .15em; text-transform: uppercase; color: var(--gold-hi);
+  text-shadow: 0 1px 0 rgba(20,16,11,.9), 0 0 14px rgba(230,192,124,.28);
+}
+#hud .res-strip { display: flex; }
+#hud .res { display: flex; align-items: center; gap: 8px; padding: 0 15px; }
+#hud .res + .res { border-left: 1px solid rgba(20,16,11,.45); box-shadow: -1px 0 0 rgba(232,204,152,.06) inset; }
+#hud .res .ic { width: 20px; height: 20px; filter: drop-shadow(0 1px 1px rgba(20,16,11,.75)); }
+#hud .res[data-k=science] .ic { color: var(--sci); }
+#hud .res[data-k=culture] .ic { color: var(--cul); }
+#hud .res[data-k=faith]   .ic { color: var(--fai); }
+#hud .res[data-k=gold]    .ic { color: var(--coin); }
+#hud .res .stack { display: flex; flex-direction: column; line-height: 1; gap: 3px; }
+/* Fixed cell + right rule: the value can run 0 -> 9999 without shoving the delta around. */
+#hud .res .v { font-size: 17px; min-width: 42px; color: #f8f0dd; text-shadow: 0 1px 0 rgba(20,16,11,.85); }
+#hud .res .d { font-size: 10.5px; min-width: 42px; letter-spacing: .04em; }
+#hud .res .d.up { color: var(--grow); }
+#hud .res .d.dn { color: var(--war); }
+
+#hud .diplo { display: flex; align-items: center; gap: 6px; padding: 0 14px; }
+#hud .dip {
+  position: relative; width: 42px; height: 40px; overflow: hidden;
+  border: 1px solid rgba(20,16,11,.85);
+  box-shadow: inset 0 0 0 1px rgba(255,236,196,.10), inset 0 -10px 14px -8px rgba(20,16,11,.9), 0 1px 2px rgba(20,16,11,.6);
+  background: linear-gradient(180deg, #2b2418, #14110c);
+  transition: transform .12s, box-shadow .12s;
+}
+#hud .dip svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+#hud .dip::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
+  background: var(--c); box-shadow: 0 -1px 0 rgba(20,16,11,.6);
+}
+#hud .dip.war { box-shadow: inset 0 0 0 1px rgba(229,115,94,.5), 0 0 0 1px rgba(229,115,94,.35), 0 1px 3px rgba(20,16,11,.7); }
+#hud .dip:hover { transform: translateY(-1px); box-shadow: inset 0 0 0 1px rgba(255,236,196,.3), 0 3px 8px rgba(20,16,11,.7); }
+
+#hud .research {
+  display: flex; align-items: center; gap: 10px; padding: 0 14px; min-width: 232px;
+}
+#hud .research .ic { width: 19px; height: 19px; color: var(--sci); flex: none; filter: drop-shadow(0 1px 1px rgba(20,16,11,.7)); }
+#hud .research .body { flex: 1; display: flex; flex-direction: column; gap: 5px; align-items: flex-start; }
+#hud .research .nm { font-size: 13px; font-weight: 700; letter-spacing: .03em; color: #f3ead6; text-shadow: 0 1px 0 rgba(20,16,11,.8); }
+#hud .research .bar {
+  width: 100%; height: 6px; background: linear-gradient(180deg, #0b0e12, #151a20);
+  box-shadow: inset 0 1px 2px rgba(20,16,11,.9), inset 0 -1px 0 rgba(255,240,205,.07); border: 1px solid rgba(20,16,11,.7);
+}
+#hud .research .bar i {
+  display: block; height: 100%;
+  background: linear-gradient(180deg, #bdeeff, #5fbede 55%, #2d7fa4);
+  box-shadow: 0 0 7px rgba(120,214,246,.55), inset 0 1px 0 rgba(255,255,255,.5);
+}
+#hud .research .eta { font-size: 11px; color: var(--label); min-width: 54px; text-align: right; letter-spacing: .04em; }
+#hud .research:hover .nm { color: #fff; }
+
+#hud .techbtn { display: flex; align-items: center; gap: 8px; padding: 0 4px 0 14px; }
+#hud .techbtn .ico { width: 19px; height: 19px; color: var(--gold); }
+#hud .techbtn kbd {
+  font: 700 10px/1 var(--caps); padding: 3px 5px; color: var(--gold-hi);
+  border: 1px solid rgba(230,192,124,.35); background: linear-gradient(180deg, #3a3122, #1a1610);
+  box-shadow: inset 0 1px 0 rgba(255,240,205,.18), 0 1px 0 rgba(20,16,11,.6);
+}
+#hud .techbtn:hover .ico { color: var(--gold-hi); }
+
+/* ---- era medallion: hangs off the centre of the bar and fills what was dead space */
+#hud .epoch {
+  position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: stretch; pointer-events: auto;
+  padding: 0 8px 10px;
+  filter: drop-shadow(0 6px 12px rgba(20,16,11,.55));
+}
+#hud .epoch .txt {
+  position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; padding: 7px 26px 9px; min-width: 190px;
+  background:
+    var(--hammer),
+    linear-gradient(180deg, #6a5a3c 0%, #3d3423 34%, #241e14 72%, #14100a 100%);
+  background-size: 96px, auto;
+  background-blend-mode: soft-light, normal;
+  border: 1px solid rgba(20,16,11,.9);
+  border-top: 0;
+  clip-path: polygon(0 0, 100% 0, 100% 68%, 50% 100%, 0 68%);
+  box-shadow: inset 0 1px 0 rgba(255,240,205,.2), inset 0 -20px 26px -18px rgba(20,16,11,.9);
+}
+#hud .epoch .txt::after {
+  content: ''; position: absolute; inset: 3px 4px 8px;
+  border: 1px solid rgba(230,192,124,.28); border-top: 0;
+  clip-path: polygon(0 0, 100% 0, 100% 66%, 50% 100%, 0 66%);
+}
+#hud .epoch .era { font-size: 9.5px; color: var(--gold); letter-spacing: .22em; }
+#hud .epoch .turn { font-size: 17px; color: #fdf3dc; letter-spacing: .05em; text-shadow: 0 1px 0 rgba(20,16,11,.9); }
+#hud .epoch .year { font-size: 10.5px; color: #c3b18d; letter-spacing: .1em; }
+#hud .epoch .wing { width: 26px; height: 34px; margin-top: 8px; color: rgba(230,192,124,.55); }
+#hud .epoch .wing.r { transform: scaleX(-1); }
+
+/* ================================================================== selection panel */
+#hud .sel {
+  position: absolute; left: var(--safe); bottom: var(--safe); width: 372px;
+  display: flex; flex-direction: column;
+}
+#hud .sel .hdr { justify-content: space-between; height: 27px; padding: 0 var(--gut); }
+#hud .sel .hdr .kind { color: var(--gold); letter-spacing: .2em; }
+#hud .sel .help {
+  width: 15px; height: 15px; border-radius: 50%; display: grid; place-items: center;
+  font: 700 10px/1 var(--caps); color: var(--label);
+  border: 1px solid rgba(230,192,124,.3); background: rgba(20,16,11,.45); cursor: help; pointer-events: auto;
+}
+#hud .sel .body { display: flex; gap: var(--gut); padding: var(--gut); }
+#hud .port {
+  position: relative; width: 86px; height: 94px; flex: none;
+  border: 1px solid rgba(20,16,11,.9);
+  background: #14110c;
+  box-shadow:
+    inset 0 0 0 1px rgba(230,192,124,.22),
+    inset 0 0 18px rgba(20,16,11,.95),
+    inset 2px 2px 6px rgba(20,16,11,.8),
+    0 2px 5px rgba(20,16,11,.7);
+}
+#hud .port .art { position: absolute; inset: 2px; overflow: hidden; display: block; }
+#hud .port .bust { width: 100%; height: 100%; display: block; }
+/* the frame's own shadow falling onto the painting */
+#hud .port::after {
+  content: ''; position: absolute; inset: 2px; pointer-events: none;
+  box-shadow: inset 0 0 10px rgba(20,16,11,.75), inset 1px 2px 4px rgba(20,16,11,.7);
+}
+#hud .port .lvl {
+  position: absolute; right: -1px; bottom: -1px; z-index: 2;
+  min-width: 20px; height: 18px; padding: 0 4px; display: grid; place-items: center;
+  font-size: 11px; color: #22190a;
+  background: linear-gradient(180deg, #f4d896, #c69c48 58%, #8f6a26);
+  border: 1px solid rgba(20,16,11,.85);
+  box-shadow: inset 0 1px 0 rgba(255,248,220,.65), 0 1px 2px rgba(20,16,11,.7);
+}
+#hud .sel .info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+#hud .sel .nm {
+  font-size: 21px; line-height: 1.05; color: #fbf3e0; letter-spacing: .012em;
+  text-shadow: 0 1px 0 rgba(20,16,11,.9), 0 2px 8px rgba(20,16,11,.55);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#hud .sel .sub { font-size: 11.5px; color: #b3a586; letter-spacing: .02em; margin-top: 2px; }
+#hud .sel .hp { display: flex; align-items: center; gap: 7px; margin-top: 9px; }
+#hud .sel .hp .lbl { font-size: 9.5px; letter-spacing: .18em; }
+#hud .sel .track {
+  flex: 1; height: 9px; position: relative; overflow: hidden;
+  background: linear-gradient(180deg, #0a0c0a, #161913);
+  border: 1px solid rgba(20,16,11,.8);
+  box-shadow: inset 0 1px 3px rgba(20,16,11,.9), inset 0 -1px 0 rgba(255,240,205,.06);
+}
+#hud .sel .track i { display: block; height: 100%; transition: width .25s; }
+#hud .sel .track i.ok   { background: linear-gradient(180deg, #cdf0b4, #6fbf5c 52%, #38773a); box-shadow: inset 0 1px 0 rgba(255,255,255,.45); }
+#hud .sel .track i.warn { background: linear-gradient(180deg, #f7dc9a, #d8a13c 52%, #8a5f19); box-shadow: inset 0 1px 0 rgba(255,255,255,.4); }
+#hud .sel .track i.bad  { background: linear-gradient(180deg, #f4a48f, #cf5236 52%, #7e2a17); box-shadow: inset 0 1px 0 rgba(255,255,255,.35); }
+#hud .sel .hp .val { font-size: 12px; min-width: 52px; text-align: right; color: #e8dcc2; }
+/* four equal cells: the last chip lands on the same gutter as the first, not 2px from the edge */
+#hud .sel .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-top: 9px; }
+#hud .st {
+  display: flex; align-items: center; gap: 4px; padding: 4px 5px; min-width: 0;
+  background: linear-gradient(180deg, rgba(255,238,200,.08), rgba(20,16,11,.34));
+  border: 1px solid rgba(20,16,11,.7);
+  box-shadow: inset 0 1px 0 rgba(255,240,205,.1), inset 0 -1px 0 rgba(20,16,11,.6);
+  pointer-events: auto;
+}
+#hud .st .ico { width: 13px; height: 13px; flex: none; color: var(--gold); }
+#hud .st b { font-size: 12px; color: #f4ead4; }
+#hud .st .lbl { font-size: 8.5px; letter-spacing: .1em; margin-left: auto; opacity: .75; }
+/* Full-bleed order rail: the row runs edge to edge, hairline dividers between the cells. */
+#hud .acts { display: grid; grid-template-columns: repeat(5, 1fr); border-top: 1px solid rgba(20,16,11,.85); box-shadow: 0 -1px 0 rgba(255,240,205,.07) inset; }
+#hud .act {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 9px 2px 8px; pointer-events: auto;
+  background: linear-gradient(180deg, rgba(255,240,205,.05), rgba(20,16,11,.28));
+  transition: background .12s, transform .06s;
+}
+#hud .act + .act { border-left: 1px solid rgba(20,16,11,.6); box-shadow: -1px 0 0 rgba(255,240,205,.06) inset; }
+#hud .act .ico { width: 21px; height: 21px; color: #e2d3ad; filter: drop-shadow(0 1px 1px rgba(20,16,11,.75)); }
+#hud .act em { font-size: 9px; letter-spacing: .12em; color: var(--label); font-style: normal; }
+#hud .act:hover { background: linear-gradient(180deg, rgba(255,232,180,.17), rgba(20,16,11,.2)); }
+#hud .act:hover .ico { color: var(--gold-hi); }
+#hud .act:hover em { color: #f0e4c8; }
+#hud .act:active { transform: translateY(1px); }
+#hud .act.on {
+  background: linear-gradient(180deg, rgba(246,214,140,.32), rgba(140,100,36,.2));
+  box-shadow: inset 0 1px 0 rgba(255,248,220,.4), inset 0 -2px 0 rgba(230,192,124,.5), inset 0 0 16px rgba(20,16,11,.5);
+}
+#hud .act.on .ico { color: #fff3d2; }
+#hud .act.on em { color: #fdf2d6; }
+
+/* ================================================================== dispatch queue */
+#hud .notes { position: absolute; right: var(--safe); top: 74px; width: 306px; display: flex; flex-direction: column; gap: 7px; }
+#hud .note {
+  display: flex; align-items: flex-start; gap: 9px; padding: 8px 10px 8px 12px;
+  transform: translateX(28px); opacity: 0;
+  animation: slidein .42s cubic-bezier(.2,.9,.3,1) forwards;
+}
+@keyframes slidein { to { transform: none; opacity: 1; } }
+#hud .note::before { z-index: 0; }
+#hud .note > * { position: relative; z-index: 1; }
+/* colour-coded rail on the leading edge, struck into the frame */
+#hud .note { border-left: 3px solid var(--gold-dim); }
+#hud .note.k-science { border-left-color: #4e94b0; }
+#hud .note.k-growth  { border-left-color: #5d9a55; }
+#hud .note.k-attack  { border-left-color: #b4523e; }
+#hud .note.k-culture { border-left-color: #8a5fae; }
+#hud .note.k-laurel  { border-left-color: #c8a151; }
+#hud .note .ic {
+  width: 26px; height: 26px; flex: none; padding: 4px; color: var(--gold);
+  background: radial-gradient(circle at 34% 26%, rgba(255,238,196,.2), rgba(20,16,11,.45));
+  border: 1px solid rgba(20,16,11,.7);
+  box-shadow: inset 0 1px 0 rgba(255,240,205,.16), 0 1px 2px rgba(20,16,11,.6);
+}
+#hud .note.k-science .ic { color: var(--sci); }
+#hud .note.k-growth .ic { color: var(--grow); }
+#hud .note.k-attack .ic { color: var(--war); }
+#hud .note.k-culture .ic { color: var(--cul); }
+#hud .note .tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+#hud .note .t { font-size: 9.5px; color: var(--gold); letter-spacing: .18em; }
+/* body copy: no tracking, real hinted grotesque, wraps to two lines rather than clipping */
+#hud .note .s { font-size: 12.5px; line-height: 1.3; letter-spacing: 0; color: #ece2cc; text-shadow: 0 1px 0 rgba(20,16,11,.7); }
+#hud .note .stamp { font-size: 10px; color: #8f8368; align-self: flex-start; margin-top: 1px; }
+
+/* ================================================================== bottom-right console
+   The end-turn plate is docked into the same frame as the world map. It is chrome, not a
+   button floating on the terrain. */
+#hud .console {
+  position: absolute; right: var(--safe); bottom: var(--safe); width: 286px;
+  display: flex; flex-direction: column;
+}
+#hud .console .well {
+  margin: var(--gut) var(--gut) 0; padding: 5px;
+  background: linear-gradient(180deg, #0a0806, #171309);
+  border: 1px solid rgba(20,16,11,.9);
+  box-shadow: inset 0 2px 5px rgba(20,16,11,.9), inset 0 -1px 0 rgba(255,240,205,.08);
+}
+#hud .endturn {
+  position: relative; width: 100%; height: 50px; overflow: hidden;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  background:
+    var(--hammer),
+    linear-gradient(180deg, #f0d08f 0%, #d9b063 26%, #b98f3f 62%, #8e6a28 100%);
+  background-size: 96px, auto; background-blend-mode: soft-light, normal;
+  border: 1px solid #4b3712;
+  /* bevel pair: light top-left, dark bottom-right */
+  box-shadow:
+    inset 1px 1px 0 rgba(255,248,222,.65),
+    inset -1px -1px 0 rgba(52,34,8,.75),
+    inset 0 -9px 12px -8px rgba(58,38,10,.8),
+    0 1px 0 rgba(20,16,11,.4), 0 4px 10px rgba(20,16,11,.5);
+  transition: filter .14s, transform .06s;
+}
+/* 15% specular sweep across the top third */
+#hud .endturn .sweep {
+  position: absolute; left: 0; right: 0; top: 0; height: 34%;
+  background: linear-gradient(101deg, rgba(255,255,255,0) 4%, rgba(255,255,255,.34) 34%, rgba(255,255,255,.06) 58%, rgba(255,255,255,0) 78%);
+  pointer-events: none;
+}
+#hud .endturn b {
+  position: relative; font-size: 17px; letter-spacing: .17em; text-transform: uppercase; color: #2a1d07;
+  /* letterpress: dark below, light above */
+  text-shadow: 0 1px 0 rgba(20,16,11,.42), 0 -1px 0 rgba(255,246,214,.55);
+}
+#hud .endturn i { position: relative; font-size: 9px; letter-spacing: .24em; color: rgba(48,32,8,.72); font-style: normal; }
+#hud .endturn::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  box-shadow: inset 0 0 0 0 rgba(255,238,190,0);
+  animation: ready 2.4s ease-in-out infinite;
+}
+@keyframes ready {
+  0%, 100% { box-shadow: inset 0 0 0 1px rgba(255,246,214,.0), 0 0 0 0 rgba(246,205,99,0); }
+  50%      { box-shadow: inset 0 0 0 1px rgba(255,250,226,.5), 0 0 14px 1px rgba(246,205,99,.32); }
+}
+#hud .endturn:hover { filter: brightness(1.09) saturate(1.05); }
+#hud .endturn:active { transform: translateY(1px); filter: brightness(.94); }
+#hud .endturn.busy { filter: grayscale(.6) brightness(.72); }
+#hud .endturn.busy::after { animation: none; }
+
+#hud .mini { margin: var(--gut); }
+#hud .mhdr { justify-content: space-between; height: 23px; padding: 0 14px; border: 1px solid rgba(20,16,11,.85); border-bottom: 0; }
+#hud .mhdr .lbl { font-size: 9.5px; color: var(--gold); letter-spacing: .2em; }
+#hud .mhdr .rose { width: 13px; height: 13px; color: rgba(230,192,124,.7); }
+#hud .mini .wrap { display: flex; border: 1px solid rgba(20,16,11,.9); box-shadow: inset 0 2px 6px rgba(20,16,11,.85); }
+#hud .mini .screen { position: relative; flex: 1; overflow: hidden; background: #070c14; }
+#hud .mini canvas { display: block; }
+/* vignette + a hairline inside the screen so the map sits *in* the console */
+#hud .mini .screen::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  box-shadow: inset 0 0 22px rgba(20,16,11,.75), inset 0 0 0 1px rgba(230,192,124,.14);
+}
+/* zoom rail lives inside the frame, in the panel's own material */
+#hud .mini .rail {
+  width: 26px; flex: none; display: flex; flex-direction: column; align-items: stretch;
+  background: linear-gradient(180deg, #3d3323, #221c13 60%, #15100a);
+  border-left: 1px solid rgba(20,16,11,.85);
+  box-shadow: inset 1px 0 0 rgba(255,240,205,.09);
+}
+#hud .mini .rail button {
+  flex: 1; display: grid; place-items: center; padding: 5px; color: #d9c79c; pointer-events: auto;
+  transition: background .12s, color .12s;
+}
+#hud .mini .rail button .ico { width: 12px; height: 12px; }
+#hud .mini .rail button:hover { background: rgba(246,214,140,.2); color: #fff3d2; }
+#hud .mini .rail button:active { background: rgba(246,214,140,.34); }
+#hud .mini .rail .sep { height: 1px; background: rgba(20,16,11,.8); box-shadow: 0 1px 0 rgba(255,240,205,.08); }
+
+/* ================================================================== tech sheet */
+#hud .tech {
+  position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+  background: radial-gradient(120% 90% at 50% 40%, rgba(6,8,11,.72), rgba(4,5,8,.92));
+  backdrop-filter: blur(3px) brightness(.7); -webkit-backdrop-filter: blur(3px) brightness(.7);
+  pointer-events: auto; z-index: 3;
+}
+#hud .tech.open { display: flex; animation: fadein .18s ease both; }
+@keyframes fadein { from { opacity: 0 } to { opacity: 1 } }
+#hud .sheet { width: min(1360px, 94vw); height: min(700px, 86vh); display: flex; flex-direction: column; }
+#hud .thdr { gap: 14px; height: 46px; padding: 0 18px; flex: none; }
+#hud .thdr h2 { margin: 0; font-size: 22px; letter-spacing: .16em; text-transform: uppercase; color: var(--gold-hi); text-shadow: 0 1px 0 rgba(20,16,11,.9); }
+#hud .thdr .rule { flex: 1; height: 1px; background: linear-gradient(90deg, rgba(230,192,124,.45), rgba(230,192,124,.05)); box-shadow: 0 1px 0 rgba(20,16,11,.6); }
+#hud .thdr .lbl { font-size: 10px; }
+#hud .thdr .lbl span { color: var(--gold); }
+#hud .chips { display: flex; gap: 5px; }
+#hud .chip {
+  font: 700 9.5px/1 var(--caps); letter-spacing: .16em; text-transform: uppercase; padding: 5px 10px;
+  color: var(--label); border: 1px solid rgba(20,16,11,.7);
+  background: linear-gradient(180deg, rgba(255,240,205,.07), rgba(20,16,11,.3));
+  box-shadow: inset 0 1px 0 rgba(255,240,205,.1);
+}
+#hud .chip:hover { color: #f2e6cc; background: linear-gradient(180deg, rgba(255,240,205,.16), rgba(20,16,11,.24)); }
+#hud .chip.on { color: #2a1d07; background: linear-gradient(180deg, #f0d193, #bd9245); box-shadow: inset 0 1px 0 rgba(255,248,222,.6); }
+#hud .thdr .close { width: 26px; height: 26px; padding: 6px; color: var(--label); }
+#hud .thdr .close:hover { color: var(--war); }
+
+/* 32px chevron gutters *outside* the content, so a chevron can never sit on a card */
+#hud .scrollwrap { flex: 1; min-height: 0; display: grid; grid-template-columns: 32px 1fr 32px; }
+#hud .page {
+  display: grid; place-items: center; color: rgba(230,192,124,.6);
+  background: linear-gradient(90deg, rgba(20,16,11,.35), rgba(20,16,11,.05));
+  border-right: 1px solid rgba(20,16,11,.6);
+}
+#hud .page.r { transform: none; border-right: 0; border-left: 1px solid rgba(20,16,11,.6); background: linear-gradient(270deg, rgba(20,16,11,.35), rgba(20,16,11,.05)); }
+#hud .page .ico { width: 14px; height: 14px; }
+#hud .page.l .ico { transform: scaleX(-1); }
+#hud .page:hover { color: var(--gold-hi); background: rgba(246,214,140,.12); }
+#hud .page:disabled { opacity: .18; cursor: default; }
+#hud .scroll {
+  overflow: auto hidden; position: relative;
+  scroll-snap-type: x mandatory; scrollbar-width: none;
+  /* the tree is wider than the sheet by design; fade the cut edges so a partial card reads as
+     "there is more" instead of as a card sliced by the clip rect */
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 26px, #000 calc(100% - 34px), transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 26px, #000 calc(100% - 34px), transparent);
+  background: radial-gradient(150% 110% at 50% 0, rgba(40,34,25,.5), rgba(10,9,7,.6));
+}
+#hud .scroll::-webkit-scrollbar { height: 0 }
+#hud .graph { position: relative; }
+/* direct child only — a descendant selector here also caught every icon inside a card
+   and stretched it to the whole node. */
+#hud .graph > svg { position: absolute; inset: 0; pointer-events: none; }
+#hud .wire .bg { fill: none; stroke: #000; stroke-opacity: .6; stroke-width: 5; stroke-linecap: round; }
+#hud .wire .fg { fill: none; stroke: #8d8268; stroke-opacity: .8; stroke-width: 2.4; stroke-linecap: round; }
+#hud .wire .hd { fill: #8d8268; fill-opacity: .8; stroke: #000; stroke-opacity: .5; stroke-width: 1; }
+#hud .wire.done .fg, #hud .wire.done .hd { stroke: #b99a63; fill: #b99a63; }
+#hud .wire.lock .fg, #hud .wire.lock .hd { stroke: #4a4437; fill: #4a4437; }
+#hud .wire { opacity: .2; transition: opacity .16s; }
+#hud .wire.lit { opacity: 1; }
+#hud .wire.lit .fg { stroke: var(--gold); stroke-opacity: 1; stroke-width: 2.8; }
+#hud .wire.lit .hd { fill: var(--gold); fill-opacity: 1; }
+
+/* era bands: alternating tone, name set in the display roman, snapped to for scrolling */
+#hud .eracol {
+  position: absolute; top: 0; bottom: 0; scroll-snap-align: start;
+  background: linear-gradient(180deg, rgba(255,236,196,.05), rgba(255,236,196,.012));
+  border-left: 1px solid rgba(230,192,124,.14); border-right: 1px solid rgba(20,16,11,.4);
+}
+#hud .eracol.alt { background: linear-gradient(180deg, rgba(20,16,11,.26), rgba(20,16,11,.1)); }
+#hud .eracol b {
+  position: absolute; top: 10px; left: 0; right: 0; text-align: center;
+  font-size: 17px; letter-spacing: .3em; text-transform: uppercase; color: rgba(230,192,124,.4);
+  text-shadow: 0 1px 0 rgba(20,16,11,.7);
+}
+#hud .eracol i {
+  position: absolute; top: 34px; left: 0; right: 0; text-align: center;
+  font-size: 9px; letter-spacing: .18em; color: rgba(198,180,142,.34); font-style: normal;
+}
+#hud .eracol::after {
+  content: ''; position: absolute; top: 50px; left: 22%; right: 22%; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(230,192,124,.22), transparent);
+}
+
+/* ---- four node states, and only four */
+#hud .tnode {
+  position: absolute; display: flex; align-items: center; gap: 10px; padding: 9px 11px;
+  border: 1px solid rgba(20,16,11,.85);
+  background: linear-gradient(180deg, rgba(74,63,46,.95), rgba(30,25,19,.96));
+  box-shadow: inset 0 1px 0 rgba(255,240,205,.11), inset 0 -1px 0 rgba(20,16,11,.7), 0 1px 0 rgba(20,16,11,.4), 0 8px 14px -8px rgba(20,16,11,.6);
+  cursor: pointer; transition: transform .1s, box-shadow .12s, filter .12s;
+}
+#hud .tnode::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background-image: var(--grain); background-size: 128px; mix-blend-mode: screen; opacity: .1;
+}
+#hud .tnode .ti {
+  width: 30px; height: 30px; flex: none; padding: 3px; color: #cbb98f;
+  background: radial-gradient(circle at 32% 26%, rgba(255,240,205,.18), rgba(20,16,11,.4));
+  border: 1px solid rgba(20,16,11,.7);
+  box-shadow: inset 0 1px 0 rgba(255,240,205,.16);
+}
+#hud .tnode .tw { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+#hud .tnode .tn { font-size: 13.5px; font-weight: 700; letter-spacing: .04em; color: #f1e6cd; text-shadow: 0 1px 0 rgba(20,16,11,.8); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#hud .tnode .tm { font-size: 10px; letter-spacing: 0; color: #a1957a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#hud .tnode .tu { display: flex; gap: 4px; margin-top: 1px; }
+#hud .tnode .tu .u {
+  width: 16px; height: 16px; padding: 1px; color: #b7a780; pointer-events: auto;
+  background: rgba(20,16,11,.35); border: 1px solid rgba(20,16,11,.6);
+  box-shadow: inset 0 1px 0 rgba(255,240,205,.1);
+}
+#hud .tnode .tick, #hud .tnode .pad { position: absolute; right: 8px; top: 8px; width: 14px; height: 14px; }
+#hud .tnode .tick { color: #f3d68f; }
+#hud .tnode .pad { color: #6f6650; opacity: .8; }
+#hud .tnode .prog { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(20,16,11,.6); }
+#hud .tnode .prog i { display: block; height: 100%; background: linear-gradient(90deg, #6fc6e6, #b8ecff); box-shadow: 0 0 8px rgba(120,214,246,.7); }
+#hud .tnode:hover { transform: translateY(-2px); box-shadow: inset 0 1px 0 rgba(255,240,205,.2), 0 10px 20px -8px rgba(20,16,11,.8); }
+
+/* researched — filled bronze, gold border, tick */
+#hud .tnode.done {
+  background: linear-gradient(180deg, rgba(122,96,50,.95), rgba(62,47,23,.96));
+  border-color: rgba(230,192,124,.62);
+  box-shadow: inset 0 1px 0 rgba(255,244,208,.3), inset 0 -1px 0 rgba(20,16,11,.6), 0 1px 0 rgba(20,16,11,.4), 0 8px 14px -8px rgba(20,16,11,.6);
+}
+#hud .tnode.done .ti { color: #ffe9b4; }
+#hud .tnode.done .tm { color: #d8bb84; }
+/* researching now — blue rim, progress fill inside the card */
+#hud .tnode.now {
+  border-color: rgba(134,217,244,.75);
+  background: linear-gradient(180deg, rgba(38,72,88,.95), rgba(17,30,38,.96));
+  box-shadow: inset 0 1px 0 rgba(190,238,255,.28), 0 0 0 1px rgba(134,217,244,.22), 0 0 22px -4px rgba(94,190,222,.5), 0 8px 14px -8px rgba(20,16,11,.7);
+}
+#hud .tnode.now .ti { color: #bdeeff; }
+#hud .tnode.now .tn { color: #eafaff; }
+#hud .tnode.now .tm { color: #96c4d6; }
+/* available — warm plate, full-colour icon */
+#hud .tnode.open .ti { color: var(--gold); background: radial-gradient(circle at 32% 26%, rgba(255,232,180,.3), rgba(20,16,11,.35)); }
+#hud .tnode.open { border-color: rgba(230,192,124,.3); }
+/* locked — desaturated, 40% */
+#hud .tnode.lock { filter: grayscale(.85); opacity: .4; }
+#hud .tnode.lock:hover { opacity: .62; }
+#hud .tnode.inpath { box-shadow: inset 0 1px 0 rgba(255,240,205,.18), 0 0 0 1px rgba(230,192,124,.45), 0 8px 16px -8px rgba(20,16,11,.7); }
+
+#hud .detail {
+  flex: none; display: flex; align-items: center; gap: 16px; padding: 12px 18px; min-height: 78px;
+  border-top: 1px solid rgba(20,16,11,.8);
+  background: linear-gradient(180deg, rgba(255,240,205,.05), rgba(20,16,11,.32));
+  box-shadow: inset 0 1px 0 rgba(255,240,205,.1);
+}
+#hud .detail .di {
+  width: 44px; height: 44px; flex: none; padding: 6px; color: var(--gold);
+  background: radial-gradient(circle at 32% 26%, rgba(255,240,205,.2), rgba(20,16,11,.45));
+  border: 1px solid rgba(20,16,11,.75);
+  box-shadow: inset 0 1px 0 rgba(255,240,205,.18), 0 2px 4px rgba(20,16,11,.6);
+}
+#hud .detail .dt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+#hud .detail .dt b { font-size: 19px; color: #fbf1da; letter-spacing: .02em; }
+#hud .detail .dt span { font-size: 12.5px; letter-spacing: 0; color: #b7a98c; }
+#hud .dunl { display: flex; align-items: center; gap: 8px; flex: none; max-width: 42%; flex-wrap: wrap; }
+#hud .dunl .lbl { font-size: 9px; width: 100%; }
+#hud .uc {
+  display: flex; align-items: center; gap: 5px; padding: 4px 7px;
+  background: linear-gradient(180deg, rgba(255,240,205,.08), rgba(20,16,11,.32));
+  border: 1px solid rgba(20,16,11,.65); box-shadow: inset 0 1px 0 rgba(255,240,205,.1);
+}
+#hud .uc .ico { width: 14px; height: 14px; color: var(--gold); }
+#hud .uc em { font-style: normal; font-size: 10.5px; letter-spacing: .04em; color: #d9cbaa; }
+#hud .detail .dc { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; min-width: 148px; }
+#hud .detail .dc b { font-size: 26px; color: var(--sci); text-shadow: 0 1px 0 rgba(20,16,11,.85), 0 0 14px rgba(134,217,244,.28); }
+#hud .detail .dc .rate { font-size: 10.5px; color: #9c907a; letter-spacing: .02em; font-weight: 400; }
+#hud .detail.done .dc b { color: var(--gold); }
+
+/* ================================================================== tooltip */
+#hud .tip {
+  position: fixed; width: 264px; padding: 10px 12px 11px; z-index: 40;
+  opacity: 0; transform: translateY(4px); transition: opacity .12s, transform .12s;
+  pointer-events: none;
+}
+#hud .tip.show { opacity: 1; transform: none; }
+#hud .tip .tt { font-family: var(--display); font-size: 16px; color: var(--gold-hi); letter-spacing: .02em; margin-bottom: 4px; }
+#hud .tip .tb { font-size: 12px; line-height: 1.36; letter-spacing: 0; color: #c8bb9d; }
+#hud .tip .tk {
+  margin-top: 7px; font: 700 9.5px/1 var(--caps); letter-spacing: .18em; color: var(--gold);
+  border-top: 1px solid rgba(230,192,124,.2); padding-top: 6px;
+}
+
+/* An order this unit cannot give — a settler has no ATTACK, a warrior no FOUND. Greyed rather
+   than removed: .acts is a fixed five-column grid and a hole in it reads as a missing button. */
+#hud .act.off { opacity: .30; pointer-events: none; }

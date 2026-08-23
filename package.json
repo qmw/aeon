@@ -1,0 +1,20 @@
+{
+  "name": "looping_opus_5_test",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "node tools/sim.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1",
+    "vite": "^8.2.2"
+  }
+}

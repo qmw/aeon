@@ -1,0 +1,4 @@
+node_modules
+shots/*.png
+!shots/final-*.png
+!shots/converged.png

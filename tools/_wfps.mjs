@@ -1,0 +1,13 @@
+import { chromium } from 'playwright';
+const EXE = '/home/piotr/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome';
+const b = await chromium.launch({ executablePath: EXE, args: ['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--no-sandbox','--disable-dev-shm-usage'] });
+const p = await b.newPage({ viewport: { width: 1600, height: 900 } });
+await p.goto('http://localhost:5173/', { waitUntil:'load', timeout:60000 });
+await p.waitForFunction('window.__ready === true', { timeout: 60000 });
+await p.waitForTimeout(14000);
+const on = await p.evaluate(() => window.__mspf);
+await p.evaluate(() => { window.water.group.visible = false; });
+await p.waitForTimeout(14000);
+const off = await p.evaluate(() => window.__mspf);
+console.log(JSON.stringify({ mspf_with_water: on, mspf_without_water: off }));
+await b.close();

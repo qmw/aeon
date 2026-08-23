@@ -1,0 +1,10 @@
+import { chromium } from 'playwright';
+const EXE='/home/piotr/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome';
+const b=await chromium.launch({executablePath:EXE,args:['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--no-sandbox','--disable-dev-shm-usage']});
+const p=await b.newPage({viewport:{width:320,height:180}});
+const errs=[]; p.on('pageerror',e=>errs.push(String(e).slice(0,900)));
+p.on('console',m=>{const t=m.text(); if(/error|ERROR|WARNING: |THREE\./.test(t)) errs.push(t.slice(0,900));});
+await p.goto('http://localhost:5173/',{waitUntil:'load',timeout:60000});
+await p.waitForFunction(()=>(window.__frameCount||0)>=3,null,{timeout:180000}).catch(()=>{});
+console.log(JSON.stringify(errs.slice(0,4),null,1));
+await b.close();

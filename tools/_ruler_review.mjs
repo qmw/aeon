@@ -1,0 +1,12 @@
+import { chromium } from 'playwright';
+import { readFileSync } from 'node:fs';
+const [,,inp,out]=process.argv;
+const b64=readFileSync(inp).toString('base64');
+const EXE='/home/piotr/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome';
+const br=await chromium.launch({executablePath:EXE,args:['--no-sandbox']});
+const p=await br.newPage({viewport:{width:1600,height:900}});
+let lines='';
+for(let x=0;x<1600;x+=100) lines+=`<div style="position:absolute;left:${x}px;top:0;width:1px;height:900px;background:rgba(255,0,255,.55)"></div><div style="position:absolute;left:${x+2}px;top:2px;color:#f0f;font:11px monospace;text-shadow:0 0 3px #000">${x}</div>`;
+for(let y=0;y<900;y+=100) lines+=`<div style="position:absolute;left:0;top:${y}px;height:1px;width:1600px;background:rgba(255,0,255,.55)"></div><div style="position:absolute;left:2px;top:${y+2}px;color:#f0f;font:11px monospace;text-shadow:0 0 3px #000">${y}</div>`;
+await p.setContent(`<body style="margin:0"><img src="data:image/png;base64,${b64}" style="position:absolute;left:0;top:0">${lines}`);
+await p.waitForTimeout(300); await p.screenshot({path:out}); await br.close(); console.log(out);

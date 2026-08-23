@@ -1,0 +1,22 @@
+import { chromium } from 'playwright';
+const [,, px='730', py='430'] = process.argv;
+const EXE = '/home/piotr/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome';
+const b = await chromium.launch({ executablePath: EXE, args: ['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--no-sandbox','--disable-dev-shm-usage'] });
+const p = await b.newPage({ viewport: { width: 1300, height: 800 } });
+await p.goto('http://localhost:5173/', { waitUntil:'load', timeout:60000 });
+await p.waitForTimeout(5000);
+const R = await p.evaluate(([px,py]) => {
+  if (window.input) window.input.update = () => {};
+  const T = window.THREE, c = window.camera, x=64.5, z=68.4, d=6.0, pit=28*Math.PI/180, ya=40*Math.PI/180;
+  const gy = window.terrain.heightAt(x,z);
+  c.position.set(x+Math.sin(ya)*Math.cos(pit)*d, gy+0.35+Math.sin(pit)*d, z+Math.cos(ya)*Math.cos(pit)*d);
+  c.lookAt(x, gy+0.35, z); c.near=0.1; c.updateProjectionMatrix(); c.updateMatrixWorld();
+  const rc = new T.Raycaster();
+  rc.setFromCamera(new T.Vector2((px/1300)*2-1, -((py/800)*2-1)), c);
+  const names = new Map();
+  for (const [k,v] of window.units.bmesh) names.set(v.mesh, k);
+  const hs = rc.intersectObject(window.units.group, true);
+  return hs.slice(0,4).map(h => ({ kind: names.get(h.object) || h.object.type, inst: h.instanceId, dist: +h.distance.toFixed(2), pt: h.point.toArray().map(n=>+n.toFixed(2)) }));
+}, [+px,+py]);
+console.log(JSON.stringify(R));
+await b.close();

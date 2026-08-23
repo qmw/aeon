@@ -1,0 +1,23 @@
+import { chromium } from 'playwright';
+const EXE = '/home/piotr/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome';
+const b = await chromium.launch({ executablePath: EXE, args: ['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--no-sandbox','--disable-dev-shm-usage'] });
+const p = await b.newPage({ viewport: { width: 1600, height: 900 } });
+await p.goto('http://localhost:5173/', { waitUntil:'load', timeout:60000 });
+await p.waitForTimeout(6000);
+const bench = (label, setup) => p.evaluate(([label, setup]) => new Promise(res => {
+  eval(setup);
+  let n=0; const t0=performance.now();
+  const tick=()=>{ n++; if(performance.now()-t0<3500) requestAnimationFrame(tick);
+    else res({ label, fps:+(n/((performance.now()-t0)/1000)).toFixed(2) }); };
+  requestAnimationFrame(tick);
+}), [label, setup]);
+const out=[];
+out.push(await bench('all on', ''));
+out.push(await bench('units hidden', 'window.units.group.visible=false'));
+out.push(await bench('units back', 'window.units.group.visible=true'));
+out.push(await bench('detail off', 'window.units.u.uDetail.value=0'));
+out.push(await bench('only prims hidden', 'window.units.u.uDetail.value=1; for(const k in window.units.prim) window.units.prim[k].mesh.visible=false'));
+out.push(await bench('prims back, decals off', 'for(const k in window.units.prim) window.units.prim[k].mesh.visible=true; window.units.decals.mesh.visible=false'));
+out.push(await bench('decals back, puffs off', 'window.units.decals.mesh.visible=true; window.units.puffs.mesh.visible=false'));
+console.log(JSON.stringify(out));
+await b.close();

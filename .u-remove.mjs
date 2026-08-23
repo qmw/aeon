@@ -1,0 +1,23 @@
+import { chromium } from 'playwright';
+const EXE = '/home/piotr/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome';
+const b = await chromium.launch({ executablePath: EXE, args: ['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--no-sandbox','--disable-dev-shm-usage'] });
+const p = await b.newPage({ viewport: { width: 600, height: 400 } });
+const errs=[]; p.on('pageerror',e=>errs.push(String(e)));
+await p.goto('http://localhost:5173/', { waitUntil:'load', timeout:60000 });
+await p.waitForTimeout(5000);
+console.log(JSON.stringify(await p.evaluate(() => {
+  const U = window.units, out = {};
+  const bcount = () => [...U.builds.values()].reduce((a,l)=>a+l.length,0);
+  out.before = { units: U.units.size, cities: U.cities.length, builds: bcount(), roads: U.roads.length, smokers: U._smokers.length, plates: U.group.children.filter(o=>o.isSprite).length };
+  const uid = [...U.units.keys()][0];
+  out.removedUnit = U.remove(uid);
+  const cname = U.cities[U.cities.length-1].name;
+  out.removedCity = U.remove(cname);
+  U.update(0.016);
+  out.after = { units: U.units.size, cities: U.cities.length, builds: bcount(), roads: U.roads.length, smokers: U._smokers.length, plates: U.group.children.filter(o=>o.isSprite).length };
+  out.removeMissing = U.remove('nope');
+  U.update(0.016);
+  return out;
+}), null, 1));
+console.log('errors', errs.slice(0,4));
+await b.close();
