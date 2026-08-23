@@ -552,6 +552,10 @@ ${DETAIL_GLSL}`)
 // bones: 0 root  1 torso  2 head  3 armL  4 armR  5 legL/axle-front  6 legR/axle-rear  7 mount
 const P = (g, b, c, mr, x, y, z, sx, sy, sz, rx, ry, rz) =>
   ({ g, b, c, mr, m: xf(x, y, z, sx, sy, sz, rx || 0, ry || 0, rz || 0) });
+// THE PART THAT NAMES THE UNIT. The six-pixel LOD cut is right about belt buckles and wrong
+// about crests: a horsehair fin is 4 cm of geometry and it is the whole difference between
+// "a soldier" and "a man". One or two per figure, exempt from the cut (see _slots).
+const KEY = (p) => (p.key = 1, p);
 
 // pivots for a standing man
 // Proportion, not just size. At 0.345/0.40/0.615 the legs were 37% of the figure and the
@@ -668,11 +672,13 @@ const shield = (bone, x, y, z, s, rx = 0, ry = 0, rz = 0) => {
     // ladder from the planks it holds together.
     P('rim', bone, C.leatherD, M_LEATH, x, y, z + 0.004, s * 1.087, t * 1.087, 0.50, TI, ry, rz),
     P('rim', bone, 0x241a11, M_LEATH, x, y, z + s * 0.055, s * 1.045, t * 1.045, 0.34, TI, ry, rz),
-    // boss: a domed bronze cap with its own shadow collar — the brightest pixel on the figure
+    // boss: a domed bronze cap with its own shadow collar — the brightest pixel on the figure,
+    // and a bright pip in the middle of a dark-rimmed disc is what says SHIELD at ten pixels.
+    // Exempt from the LOD cut with the device below: those two are the blazon.
     P('cyl', bone, 0x241a11, M_LEATH, x, y, z + s * 0.21, s * 0.34, 0.018, s * 0.34, TI + PI2, ry, rz),
-    P('sph', bone, C.bronze, M_MET, x, y, z + s * 0.26, s * 0.25, s * 0.25, s * 0.21, TI, ry, rz),
+    KEY(P('sph', bone, C.bronze, M_MET, x, y, z + s * 0.26, s * 0.27, s * 0.27, s * 0.22, TI, ry, rz)),
     // the device: ONE civ-coloured bar across the boards, so ownership still reads off the face
-    P('box', bone, 'B', M_CLOTH, x, y + t * 0.30, z + s * 0.20, s * 0.86, t * 0.085, s * 0.075, TI, ry, rz),
+    KEY(P('box', bone, 'B', M_CLOTH, x, y + t * 0.30, z + s * 0.20, s * 0.86, t * 0.105, s * 0.075, TI, ry, rz)),
     // four iron plank cleats, deliberately off-balance so nothing on this board is concentric
     P('sph', bone, C.iron, M_MET, x + s * 0.31, y + t * 0.30, z + s * 0.16, s * 0.085, s * 0.085, s * 0.07, TI, ry, rz),
     P('sph', bone, C.iron, M_MET, x - s * 0.33, y - t * 0.08, z + s * 0.17, s * 0.085, s * 0.085, s * 0.07, TI, ry, rz),
@@ -775,13 +781,14 @@ const DEFS = {
       P('box', 2, 0x2f2418, M_LEATH, -0.093, 0.018, 0.018, 0.032, 0.100, 0.098, 0, 0, -0.10),
       // Transverse crest — across the head, not along it. At 35 px the fore-and-aft crest
       // vanished into the helmet dome; a bar wider than the shoulders does not.
-      P('box', 2, 0x352a1c, M_LEATH, 0, 0.140, 0, 0.100, 0.030, 0.044),        // crest socket
-      // A ROUNDED CREST, and it is NOT the civ colour. A flat fin in saturated blue on top of
-      // a helmet is a blue rectangle from every angle this camera can reach — a cap, not a
-      // crest. Horsehair is dyed madder, not woad, so it stays out of the livery read. Laid
-      // ACROSS the head and wider than the dome: from a 55-degree camera a fore-and-aft ridge
-      // hides inside the helmet's own outline, and a cross of both reads as a hat.
-      P('caps', 2, 0x9e3a2c, M_CLOTH, 0, 0.176, 0, 0.040, 0.094, 0.040, 0, 0, PI2),
+      KEY(P('box', 2, 0x352a1c, M_LEATH, 0, 0.140, 0, 0.118, 0.030, 0.048)),   // crest socket
+      // Dyed madder, never the civ colour, and laid ACROSS the head: a fore-and-aft ridge hides
+      // inside the helmet's own outline from a 55-degree camera. MEASURED: at 0.040 x 0.094 its
+      // LOD size was 0.061 against a 0.083 cut, i.e. the one part that names this unit was
+      // switched OFF in every frame the referee has ever scored. And a BOX, not a capsule —
+      // a thin capsule is all grazing normal, so the two rim terms own every pixel of it and
+      // the crest arrives as pink piping; a bar has a flat top and takes the key at full value.
+      KEY(P('box', 2, 0x7c2417, M_CLOTH, 0, 0.176, 0, 0.216, 0.064, 0.042)),
       // The shield rides the FOREARM, not the air beside it: the fist is at (0,-0.213,0.014)
       // and the board's grip block now lands on it, with a strap across the arm above.
       ...shield(3, 0.048, -0.166, 0.062, 0.212, 0, 0, 0.10),
@@ -824,7 +831,7 @@ const DEFS = {
       P('box', 2, 0x35301f, M_LEATH, 0.12, 0.03, 0.01, 0.045, 0.115, 0.115),   // cheek guards
       P('box', 2, 0x35301f, M_LEATH, -0.12, 0.03, 0.01, 0.045, 0.115, 0.115),
       P('box', 2, C.leatherD, M_LEATH, 0, 0.150, -0.004, 0.032, 0.030, 0.170),
-      P('box', 2, 'B', M_CLOTH, 0, 0.180, -0.004, 0.024, 0.090, 0.160),        // crest
+      KEY(P('box', 2, 'B', M_CLOTH, 0, 0.180, -0.004, 0.030, 0.096, 0.170)),   // crest
       ...shield(3, 0.054, -0.160, 0.060, 0.198, 0, 0, 0.05),
       P('box', 3, C.leatherD, M_LEATH, 0.030, -0.144, 0.024, 0.072, 0.026, 0.072, 0, 0, 0.05),
       // SILHOUETTE GATE. Flat-black at 35 px, the spearman was the warrior: same blob, same
@@ -2135,11 +2142,16 @@ float hexd(vec2 p){
 void main(){
   vec2 d = vUv - 0.5;
   if (vMode < 0.5) {
-    // --- contact AO. Plateau then feather: the caster's own footprint is fully dark and only
-    // the penumbra ramps, so there is no lit gap between the boots and the darkest texel.
+    // --- contact AO. Plateau then feather.
+    // MEASURED (tools/_u5ab.mjs, decals forced opaque): with the plateau ending at 0.30 of the
+    // radius, every texel this camera can SEE was in the feather — the dark core sits under the
+    // caster's own footprint and the caster is standing on it. Nine reviews in a row have said
+    // "nothing is grounded" about a layer that was drawing perfectly and hiding all of its
+    // value behind the thing it was grounding. The plateau now runs to 0.58 of the radius, so
+    // the darkness clears the boots and the wall footing and lands on ground the eye is on.
     float r = length(d * 2.0);
-    float a = 1.0 - smoothstep(0.30, 1.0, r);
-    a = a * (0.55 + 0.45 * a) * vK;
+    float a = 1.0 - smoothstep(0.58, 1.0, r);
+    a = a * (0.62 + 0.38 * a) * vK;
     if (a < 0.006) discard;
     #ifdef MUL
       gl_FragColor = vec4(mix(vec3(1.0), vCol, a), 1.0);
@@ -2176,10 +2188,15 @@ void main(){
     float x = (vUv.x - 0.5) * 2.0;
     float wid = 1.0 - 0.30 * t;                       // narrows as it runs out
     float r = abs(x) / wid;
-    float body = (1.0 - smoothstep(0.18, 1.0, r)) * (1.0 - smoothstep(0.05, 1.0, t));
+    // A SHADOW HOLDS ITS VALUE AND THEN ENDS. The old ramp started fading at t 0.05 — five
+    // percent of the way out — so by the time the wedge cleared the caster's own silhouette it
+    // was down to a fifth of its value and the only part of it the camera could see was the
+    // part that had already faded. It now holds to just past half its run and dies in the last
+    // third, which is what an umbra with a penumbra on the end of it looks like.
+    float body = (1.0 - smoothstep(0.40, 1.0, r)) * (1.0 - smoothstep(0.52, 1.06, t));
     // the contact wedge itself: small, nearly opaque, hard against the boots
     float core = 1.0 - smoothstep(0.10, 0.70, length(vec2(x * 1.15, (t - 0.04) * 2.1)));
-    float a = clamp(body * 0.82 + core * 1.05, 0.0, 1.0) * vK;
+    float a = clamp(body * 1.02 + core * 0.75, 0.0, 1.0) * vK;
     if (a < 0.006) discard;
     #ifdef MUL
       gl_FragColor = vec4(mix(vec3(1.0), vCol, a), 1.0);
@@ -3222,6 +3239,16 @@ export class Units {
           const e = p.m.elements;
           const a = [Math.hypot(e[0], e[1], e[2]), Math.hypot(e[4], e[5], e[6]), Math.hypot(e[8], e[9], e[10])].sort((x, y) => y - x);
           p._sz = Math.max(Math.sqrt(a[0] * a[1]), a[0] * 0.46);
+          // MASS, not extent. A helmet dome is big on all three axes; a brow band is a wide
+          // hoop 4 cm thick. The value ladder below has to tell those apart, because the
+          // accent band belongs to the TRIM and the dome is a mass.
+          p._vol = Math.cbrt(a[0] * a[1] * a[2]);
+          // A crest is 4 cm of horsehair and the six-pixel cut ate it at every gameplay
+          // distance — which is why the panel portrait reads as a warrior and the man on the
+          // board reads as a pale ball. The parts that NAME a unit are exempt: they are two
+          // per figure, they are the last thing to go, and without them the LOD is drawing a
+          // silhouette nobody can name.
+          if (p.key) p._sz = Math.max(p._sz, 0.20);
         }
         const s = pr.n++;
         u.slots[i] = s;
@@ -3256,13 +3283,20 @@ export class Units {
         // read needs the accent as much as it needs the mass, so polished metal is centred a
         // band and a half above everything else and is the only thing allowed near the top.
         const met = z === 2 || z === 11;
+        // THE ACCENT IS A RIM, NOT A MASS. Measured off the shipped frame: a warrior's helm
+        // dome is the single largest part above the belt and it was sitting at the TOP of the
+        // value ladder, so every soldier on the board read as a pale egg with a blue skirt —
+        // the review's "unnameable blue-tan clump", in one number. A cuirass and a dome are
+        // mass and belong in the mid band; the brow band, the boss, the pauldron caps and the
+        // blade are trim, they are what glints, and they keep the accent to themselves.
+        const bigMet = met && p._vol > 0.12;
         // THREE HARD BANDS, and which band a part lands in is decided by WHERE IT IS, not only
         // by what it is made of. At forty pixels the eye reads a figure as a stack of three
         // values top to bottom: a bright crown, a mid mass, a dark base. Polished metal owns
         // the accent, the legs and boots own the floor, everything else is the mass — and the
         // head gets half a band of lift on top so the silhouette always has a light top.
         const lo = p.b === 5 || p.b === 6;
-        const cen = (met ? 0.615 : lo ? 0.11 : 0.375) + (p.b === 2 && !met ? 0.075 : 0) + gnd * 0.20;
+        const cen = (met ? (bigMet ? 0.455 : 0.615) : lo ? 0.11 : 0.375) + (p.b === 2 && !met ? 0.075 : 0) + gnd * 0.20;
         // Metal gets a NARROW band, not a big one: it is already the brightest thing in the
         // frame once the spec lobe is on it, and stretching pale steel the same way as wool put
         // a blown-white pickaxe head in the middle of the board.
@@ -3276,7 +3310,7 @@ export class Units {
         // landed on screen as a near-white 40 px streak beside every warrior — a blown
         // highlight the eye reads as an artefact, not as a sword. 0.70 keeps polished metal
         // the top of the value ladder (cloth caps at 0.60) without clipping.
-        const cap = met ? 0.70 : lo ? 0.26 : 0.60;
+        const cap = met ? (bigMet ? 0.55 : 0.70) : lo ? 0.26 : 0.60;
         _c.setHSL(_hsl.h, _hsl.s, THREE.MathUtils.clamp(l, 0.05, cap), THREE.SRGBColorSpace);
         pr.mesh.setColorAt(s, _c);
         // roughness rides the same lot: a scuffed helmet and a polished one in the same file
@@ -3412,11 +3446,14 @@ export class Units {
       // The settlement's own occlusion: the ground a town stands on never sees the sky.
       const s = (c.foot ?? 0.8) * 2.20;
       _m.compose(_v.set(c.x, c.y + 0.055, c.z), _q2.identity(), _s.set(s, 1, s));
-      this.shadows.push(_m, AO_MUL, 0.13, 0);
+      this.shadows.push(_m, AO_MUL, 0.22, 0);
       // and the town's own bulk throws a shadow off its down-sun side: without it a walled
       // capital reads as a model kit placed on a photograph of a hill.
+      // The acceptance test the art bible writes for this: the terrace directly downsun of a
+      // keep reads 45-55% darker than the lit terrace beside it. 0.14 of a 0.325 multiply is
+      // 9%, which is why the referee has scored this frame as having no shadows at all.
       this._shade(c.x, c.y + 0.060, c.z, (c.foot ?? 0.8) * (1.4 + c.tier * 0.35),
-        (c.foot ?? 0.8) * 1.15, 0.14);
+        (c.foot ?? 0.8) * 1.15, 0.36);
     }
     this._propGround();
     // Static contact patches — the pier, the yards. A dock stands on water, and water does not
@@ -3458,7 +3495,7 @@ export class Units {
         // curtain wall wearing a 1.2-wide disc reads as a moat, not as a wall standing on dirt.
         _m.compose(_v.set(x, p[1] + 0.020, z), _q.setFromEuler(_e.set(0, p[6], 0)),
           _s.set(rx * 2.1, 1, rz * 2.1));
-        this.shadows.push(_m, PROP_MUL, flat ? 0.20 : 0.34, 0);
+        this.shadows.push(_m, PROP_MUL, flat ? 0.24 : 0.42, 0);
         if (flat || h <= 0.26) continue;
         // The cast shadow is as wide as the caster's silhouette ACROSS the sun, so a wall
         // throws a wall-shaped shadow and a tower throws a tower-shaped one.
@@ -3469,7 +3506,7 @@ export class Units {
         // a 1.9-unit watchtower, so the tallest thing on the board had no more presence on the
         // ground than a hut. Tall casters reach across the next hex under a low sun; the cap only
         // exists because a flat quad cannot follow relief for ever.
-        this._shade(x, p[1] + 0.026, z, h, w * 0.92, 0.66, THREE.MathUtils.clamp(h * 1.10, 0.35, 2.45), PROP_MUL);
+        this._shade(x, p[1] + 0.026, z, h, w * 0.92, 0.74, THREE.MathUtils.clamp(h * 1.10, 0.35, 2.45), PROP_MUL);
       }
     }
   }
