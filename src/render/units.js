@@ -3668,23 +3668,18 @@ export class Units {
     // pose leans a little back, which on a 40-degree camera turns a bald scalp into a chest,
     // a tabard and a face — the difference between a figure and a shoulder-blob seen from above.
     if (atk || !d.boat) _q.multiply(_q2.setFromEuler(_e.set(0.30 * atk - (d.boat ? 0 : 0.14), 0, 0)));
-    // ---- TIP THE LONG AXIS INTO THE IMAGE PLANE. At a 55-degree pitch a standing figure is
-    // only 18 degrees off the optical axis, so it projects as its own plan view: a helmet lid,
-    // two shoulders and a shield lying flat — the "unreadable blob" every review has named.
-    // Rotating it about the horizontal axis ACROSS the view by the camera's own excess pitch
-    // swings that axis back toward perpendicular and the plan becomes an elevation: crest,
-    // face, tabard, belt, boots stacked vertically in screen space, feet still on the pivot.
-    // WHICH WAY depends on which axis carries the read, and this is where every earlier pass
-    // got it backwards. A man is TALL: his axis is vertical, so he must recline AWAY from the
-    // lens (measured: projected height x2.5, 36 px to 90 px on a 133 px hex). A horse and a
-    // cart are LONG: their axis is horizontal and already square to the view, so the same
-    // rotation foreshortens them into a belly and a heap of scaffolding — they tip the other
-    // way, toward the lens, which is what stands their flanks and wheels up instead. Hulls sit
-    // in water that is already flat to the camera and take neither.
+    // ---- LEAN INTO THE CAMERA. At a 62-degree pitch a standing figure projects as its own
+    // plan view: shoulders, cloak and a shield lying flat, which is the "unreadable blob"
+    // every review has named. Tipping the figure 17 degrees toward the lens about the
+    // horizontal axis across the view turns that plan back into an elevation — helmet, chest,
+    // belt and boots stacked vertically in screen space — without moving the feet, which stay
+    // on the pivot. It is what Civ does and it costs one quaternion.
+    // How far to tip is a function of how far DOWN the camera is looking: at the gameplay
+    // notch (55 degrees) a figure needs 17 to stand up again, at portrait range (~40) it needs
+    // almost nothing and a fixed angle would just make it look drunk.
     if (!d.boat && this._lean > 0.01) {
       const b = Math.atan2(this.camera.position.x - u.x, this.camera.position.z - u.z);
-      const ln = (d.mounted || d.wheels) ? this._lean : -this._lean;
-      _q.premultiply(_q2.setFromAxisAngle(_v2.set(Math.cos(b), 0, -Math.sin(b)), ln));
+      _q.premultiply(_q2.setFromAxisAngle(_v2.set(Math.cos(b), 0, -Math.sin(b)), this._lean));
     }
     u.atkS = atk;
     root.compose(_v.set(u.x + Math.sin(u.yaw) * 0.26 * atk * usc, u.y + bobY - (d.boat ? 0 : 0.022),
