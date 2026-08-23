@@ -1333,13 +1333,7 @@ export class Terrain {
           // snowline jittered by ASPECT: the sun-facing flank melts out a good 30m higher than
           // the lee, which is what stops a snowline reading as a contour line on a map
           float aspect = dot( normalize( wn.xz + vec2( 1e-4 ) ), vec2( 0.86, 0.30 ) );
-          // JITTER MUST BE SMALLER THAN THE BAND IT JITTERS. uSnow spans maxH*0.78..0.99 — about
-          // 1.75 u here — and the old triple was +-1.3 +-0.75 +-0.95, i.e. 1.7x the band. Snow
-          // therefore detached from the snowline completely: isolated white caps printed into
-          // mid-massif rock and bare rock left above the line, which is the "blown white voids
-          // and a hole punched through the top-left massif" read. Keep the sum under half a band
-          // and the line stays broken without teleporting.
-          float snowH = smoothstep( uSnow.x, uSnow.y, vWP.y + ( nVar.b - 0.5 ) * 0.95 + ( nMac.b - 0.5 ) * 0.55 - aspect * 0.45 );
+          float snowH = smoothstep( uSnow.x, uSnow.y, vWP.y + ( nVar.b - 0.5 ) * 2.6 + ( nMac.b - 0.5 ) * 1.5 - aspect * 0.95 );
           float wSnow = clamp( hblend( vMat.z * 0.95 + snowH * 1.1, warp ) * ( 1.0 - gslope * 1.3 ), 0.0, 1.0 );
           float wSand = clamp( hblend( smoothstep( 0.22, 0.86, vMat.y ) * 0.95 + smoothstep( 0.55, -0.05, vWP.y ) * 0.85, warp )
                           * ( 1.0 - wRock * 0.75 ), 0.0, 1.0 );
@@ -2318,7 +2312,7 @@ export class Terrain {
           // snow: needs altitude, a face that is not sheer, and it favours the lee side.
           // Wind noise strips it off the exposed crest, so it never reads as a white wash.
           float lee = 0.78 + 0.22 * clamp( -dot( normalize( rN.xz + vec2( 1e-4 ) ), vec2( 0.80, 0.60 ) ), -1.0, 1.0 );
-          float alt = smoothstep( uSnow.x, uSnow.y, vRWP.y + ( rk1.b - 0.5 ) * 0.90 );   // see snowH: jitter < band
+          float alt = smoothstep( uSnow.x, uSnow.y, vRWP.y + ( rk1.b - 0.5 ) * 2.2 );
           float lie = smoothstep( 0.12, 0.58, clamp( rN.y, 0.0, 1.0 ) );      // sheer faces shed it
           float strip = smoothstep( 0.22, 0.74, rk2.b * 0.55 + rk1.a * 0.45 );// wind off the crest
           // a summit wears a cap, not a coat: snow needs altitude AND to be up the mesh, so
