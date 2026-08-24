@@ -2348,7 +2348,12 @@ export class Terrain {
           // shrink with its own FOOTPRINT, which is what rFin is, and only the material can do
           // that. Two thirds of the amplitude survives at the back of the frame, so the flank
           // still measures well clear of the 12 floor and still reads as rock.
-          rock *= 1.0 + ( smoothstep( 0.26, 0.74, rk4.a ) - 0.5 ) * 0.376 * mix( 0.30, 1.0, rFin );
+          // Far tail 0.16, not 0.30: the far massif measured MID/HF 0.70 — noise dominating
+          // structure, i.e. this band outliving the bedding and the block scatter it is
+          // supposed to sit under — and it is also the near/far ramp's far end. Two thirds
+          // survives in the near field, a sixth at the back, and the flank still measures
+          // clear of the 12 floor because the beds and the joints carry it there.
+          rock *= 1.0 + ( smoothstep( 0.26, 0.74, rk4.a ) - 0.5 ) * 0.330 * mix( 0.16, 1.0, rFin );
 
           // snow: needs altitude, a face that is not sheer, and it favours the lee side.
           // Wind noise strips it off the exposed crest, so it never reads as a white wash.
@@ -2372,6 +2377,53 @@ export class Terrain {
           // boulder ends up with grey snow on top
           rock = mix( vec3( dot( rock, vec3( 0.2126, 0.7152, 0.0722 ) ) ), rock, 1.20 );
           diffuseColor.rgb = mix( diffuseColor.rgb * rock * 2.85, snowC, snowAmt );
+
+          // ---- THE HEX LATTICE, CARRIED ACROSS THE MASSIF ------------------------------
+          // Non-negotiable #1 is that the player can see the tile they are about to click, and
+          // on the one biome that is a third of the frame they could not. grid.js draws its
+          // decal on the GROUND; every mountain hex has a rock loft standing on it that wins
+          // the depth test rim to rim, so the lattice was being drawn correctly and then
+          // occluded across the whole range. No stroke strength and no depth bias answers that
+          // (a 4-unit view-space bias was tried on the live frame and moved nothing) — the line
+          // has to be drawn ON the rock. So the rock draws it, off the SAME axial->world lattice
+          // grid.js uses, at the same world XZ: q = x/1.5, r = z/sqrt3 - q/2, cube-rounded to
+          // the owning hex, then the identical three-half-space distance to the hexagon
+          // boundary. Two halves of one line — one on the ground, one on the rock standing on
+          // it — and they meet, because they are the same function of the same world position.
+          vec2 hxz = vRWP.xz;
+          float hq = hxz.x * 0.6666667, hr = hxz.y * 0.5773503 - hxz.x * 0.3333333;
+          vec3 hcu = vec3( hq, -hq - hr, hr ), hR = floor( hcu + 0.5 ), hdd = abs( hR - hcu );
+          if ( hdd.x > hdd.y && hdd.x > hdd.z ) hR.x = -hR.y - hR.z;
+          else if ( hdd.y > hdd.z ) hR.y = -hR.x - hR.z;
+          else hR.z = -hR.x - hR.y;
+          vec2 hL = hxz - vec2( 1.5 * hR.x, 1.7320508 * ( hR.z + hR.x * 0.5 ) );
+          float hD = 0.8660254 - max( max( abs( dot( hL, vec2( 0.8660254, 0.5 ) ) ), abs( hL.y ) ),
+                                      abs( dot( hL, vec2( -0.8660254, 0.5 ) ) ) );
+          // Footprint taken on the XZ PLANE, not on the 3D surface: a face tilted away from the
+          // lens barely moves in xz per pixel, so this stays small exactly where the true
+          // gradient runs 2-4x large and switches the grid off — which is the same mistake that
+          // took the lattice off every steep surface in the frame once already. Same
+          // 15-px-per-hex moire cutoff grid.js uses, so the ground half and the rock half of a
+          // line fade together instead of one outliving the other.
+          float hPx = max( length( vec2( rdx.x, rdy.x ) ), length( vec2( rdx.z, rdy.z ) ) ) + 1e-5;
+          // 1.40 of core and 1.40 of analytic feather — half a pixel wider than the ground
+          // stroke on either side, on purpose and in both directions at once. Rock is the one
+          // surface where a stroke has to beat a material running at ~15 HF_rms, and a wider
+          // line beats it two ways: the eye gets more of it, and its energy sits in the 6-16 px
+          // band a player reads rather than in the pixel band the frame's own detail budget is
+          // measured in. Still ONE stroke and ONE profile — nothing beside it, nothing under it.
+          float hInk = ( 1.0 - smoothstep( 1.40, 2.80, hD / hPx ) )
+                     * ( 1.0 - smoothstep( 0.115, 0.215, hPx ) );
+          // A DARKENING, in all three channels, on the same warm-neutral triple grid.js
+          // engraves with: ink on the rock, never a lit wire on unlit stone. It leans harder
+          // than the ground stroke because the surface under it does — bedded rock, scree and a
+          // fracture net all run at ~15 HF_rms and a 30% dip vanishes inside that. It lands on
+          // the ALBEDO, so the ambient bounce (which is albedo-weighted, twice) carries it into
+          // shade instead of leaving the line lit-side only.
+          diffuseColor.rgb *= mix( vec3( 1.0 ), vec3( 0.300, 0.268, 0.232 ), hInk );
+          // ...and it claims the same protect mask the decal does, or post.js's footprint-graded
+          // far mip removes most of a 3-px stroke after the rock has drawn it correctly.
+          diffuseColor.a = min( diffuseColor.a, 1.0 - hInk * 0.85 );
           float rspec = ( 0.055 + 0.11 * snowAmt ) * ( 0.45 + 1.1 * rk4.a );  // sparkle, not gloss`)
         .replace('#include <normal_fragment_maps>', 'normal = normalize( mat3( viewMatrix ) * rN );')
         .replace('#include <specularmap_fragment>', 'float specularStrength = rspec;')

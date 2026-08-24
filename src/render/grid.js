@@ -575,8 +575,15 @@ export class Grid {
       // beaten by anything a player can see standing on a hex — correct on grass, hopeless
       // against a boulder field — so the massif came back with a broken stipple where its grid
       // should be, which is standing reject #1 and a whole biome the player cannot count.
-      // A rough tile gets a bias sized to the props that stand on it instead.
-      const bias = rough ? 1.25 : 0;
+      // ...and that bias is now 0.25, not 1.25, because THE ROCK DRAWS ITS OWN HALF OF THE
+      // LINE. terrain.js's rock material evaluates the same axial->world lattice at its own
+      // world XZ, so the massif's stroke is painted on the summit geometry where the player is
+      // looking instead of on the ground two units under it. A big view-space bias here is the
+      // opposite fix and an actively wrong one: it punches the GROUND's line through the loft
+      // in front of it, at the ground's XZ, which rasterises as a stray rod lying across the
+      // rock at the wrong place. Small enough that anything standing on a hex still occludes
+      // the ground line, and the rock hands it straight back.
+      const bias = rough ? 0.25 : 0;
 
       const key = ((t.q / CH_Q) | 0) * 64 + ((t.r / CH_R) | 0);
       let ch = chunks.get(key);
