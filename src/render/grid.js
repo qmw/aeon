@@ -86,10 +86,9 @@ attribute float aBias;    // EXTRA depth bias, for tiles with rock standing on t
 uniform sampler2D uState;
 uniform float uFar, uBias;
 varying vec2 vL; varying vec4 vS; varying vec3 vP; varying vec2 vT;
-varying float vFade; varying float vD; varying float vWet; varying float vRock;
+varying float vFade; varying float vD; varying float vWet;
 void main() {
   vL = aLocal; vT = aTile;
-  vRock = step(0.5, aBias);   // the rough-tile flag aBias already carries
   vS = texture2D(uState, aTile);
   vWet = step(aFade, 0.0);
   vec4 wp = modelMatrix * vec4(position, 1.0);
@@ -114,7 +113,7 @@ void main() {
 const FRAG = /* glsl */`
 precision highp float;
 varying vec2 vL; varying vec4 vS; varying vec3 vP; varying vec2 vT;
-varying float vFade; varying float vD; varying float vWet; varying float vRock;
+varying float vFade; varying float vD; varying float vWet;
 uniform sampler2D uState;
 uniform float uGrid, uDist, uDim, uCurR, uTime;
 uniform vec3 uSun; uniform vec2 uCursor, uStep;
@@ -319,14 +318,7 @@ void main() {
     // warm rock, leaves a residue that is almost pure blue. Measured: the surviving strokes over
     // the mountains came back navy. Same luminance (0.360), warm side of neutral, so the line is
     // ink on the ground everywhere instead of ink on grass and a blue wire on rock.
-    // ...and the stroke ADAPTS TO THE SURFACE UNDER IT. A fixed multiplier gives the same
-    // RATIO everywhere, and a ratio is not a read: on smooth sand a 30% dip is the only edge
-    // for twenty pixels either side, while on the massif — scree, strata and a fracture net
-    // all running at ~15 HF_rms — the same dip lands inside the rock's own local contrast and
-    // the eye never finds the line. Rock is the one surface where the stroke has to beat a
-    // busy material, so the rough tiles get a deeper multiplier. Still ONE stroke, one
-    // profile, still a darkening in all three channels, and still the same 2 px of core.
-    vec3 seamK = mix(vec3(0.400, 0.355, 0.310), vec3(0.318, 0.280, 0.242), vRock);
+    vec3 seamK = vec3(0.400, 0.355, 0.310);
     MUL(seamK, (1.0 - smoothstep(1.00, 2.00, dp)) * g * mix(1.16, 0.94, lit))
   }
   // ALPHA IS NOT OPACITY HERE — it is the DECAL PROTECT MASK, and it is the other half of

@@ -2302,19 +2302,12 @@ export class Terrain {
           rock *= 1.0 - smoothstep( 0.18, 0.02, rk2.a ) * 0.24;           // slab joints
           rock *= mix( 1.0, 0.955 + 0.09 * smoothstep( 0.24, 0.76, rk3.a ), rNear );  // 10 px grain
           rock *= 1.0 - smoothstep( 0.30, 0.07, rk3.a ) * 0.13 * mix( 0.5, 1.0, rNear );  // joints, 10 px
-          rock *= 1.0 - smoothstep( 0.24, 0.03, rk4.a ) * 0.42 * mix( 0.30, 1.0, rFin );  // hairlines, 3.4 px
+          rock *= 1.0 - smoothstep( 0.24, 0.03, rk4.a ) * 0.42 * mix( 0.5, 1.0, rFin );   // hairlines, 3.4 px
           rock *= mix( 1.0, 0.932 + 0.136 * rk3.a, rNear );               // cavity AO
-          // 3.4 px grit — the only band on this material that lands in HF, so it is both what
-          // keeps a distant flank from mipping down to a painted plate AND the near/far detail
-          // ramp's far end. It used to run UNGATED, which is why the fish-scale crosshatch
-          // measured the same density on the front row of the massif and on its back row: a
-          // material whose finest band does not shrink with its own footprint is a decal, and
-          // at 3.4 px near it is well under one pixel at the back of the frame, where
-          // sub-Nyquist detail does not fade — it beats against the pixel grid into a fixed
-          // pattern. rFin is that footprint (1.75 u tile over a 32-cycle atlas), so this is a
-          // real mip-chain LOD and not a distance blur. Just under half survives at the back,
-          // which keeps the flank clear of the 12 HF floor on the beds and joints alone.
-          rock *= 1.0 + ( smoothstep( 0.26, 0.74, rk4.a ) - 0.5 ) * 0.376 * mix( 0.45, 1.0, rFin );
+          // 3.4 px grit, LOD'd by the mip chain and by nothing else. Every band above this one
+          // lands in MID; this is the only one that lands in HF, so it is what keeps a distant
+          // flank from mipping down to a painted plate.
+          rock *= 0.812 + 0.376 * smoothstep( 0.26, 0.74, rk4.a );
 
           // snow: needs altitude, a face that is not sheer, and it favours the lee side.
           // Wind noise strips it off the exposed crest, so it never reads as a white wash.
@@ -2338,45 +2331,6 @@ export class Terrain {
           // boulder ends up with grey snow on top
           rock = mix( vec3( dot( rock, vec3( 0.2126, 0.7152, 0.0722 ) ) ), rock, 1.20 );
           diffuseColor.rgb = mix( diffuseColor.rgb * rock * 2.85, snowC, snowAmt );
-
-          // ---- THE HEX LATTICE, CARRIED ONTO THE ROCK ---------------------------------
-          // Non-negotiable #1 is that a player can see the tile they are about to click, and
-          // on the one biome that is a third of the frame they could not. grid.js draws its
-          // decal on the GROUND; every mountain hex has a loft standing on it that wins the
-          // depth test from rim to rim, so the lattice was being drawn correctly and then
-          // occluded across the whole range. No stroke strength and no depth bias answers
-          // that — the line has to be drawn ON the rock. So the rock draws it, off the SAME
-          // axial->world lattice grid.js uses (x = 1.5q, z = sqrt3(r + q/2)), at the same
-          // world XZ: two halves of one line that meet at the silhouette because they are the
-          // same function of the same world position.
-          vec2 hxz = vRWP.xz;
-          float hq = hxz.x * 0.6666667, hr = hxz.y * 0.5773503 - hxz.x * 0.3333333;
-          vec3 hcu = vec3( hq, -hq - hr, hr ), hR = floor( hcu + 0.5 ), hdd = abs( hR - hcu );
-          if ( hdd.x > hdd.y && hdd.x > hdd.z ) hR.x = -hR.y - hR.z;
-          else if ( hdd.y > hdd.z ) hR.y = -hR.x - hR.z;
-          else hR.z = -hR.x - hR.y;
-          vec2 hL = hxz - vec2( 1.5 * hR.x, 1.7320508 * ( hR.z + hR.x * 0.5 ) );
-          float hD = 0.8660254 - max( max( abs( dot( hL, vec2( 0.8660254, 0.5 ) ) ), abs( hL.y ) ),
-                                      abs( dot( hL, vec2( -0.8660254, 0.5 ) ) ) );
-          // ANALYTIC AA off the EXACT gradient of the field, which is what grid.js does and is
-          // the whole reason this works on a cliff. On a near-vertical flank hD barely changes
-          // from one pixel to the next, so hD/hPx stays large everywhere except within a pixel
-          // of the boundary: the stroke comes out the SAME 2 px wide running up the face as it
-          // is on flat ground. An xz-footprint width instead paints the hex edge as a band
-          // across the whole flank, which is the stray-rod read a bias-based fix leaves behind.
-          float hPx = max( length( vec2( dFdx( hD ), dFdy( hD ) ) ), 1e-5 );
-          float hXZ = max( length( vec2( rdx.x, rdy.x ) ), length( vec2( rdx.z, rdy.z ) ) );
-          // grid.js's own profile and its own 15-px-per-hex moire cutoff, so the ground half
-          // and the rock half of a line fade together instead of one outliving the other.
-          float hInk = ( 1.0 - smoothstep( 1.00, 2.00, hD / hPx ) )
-                     * ( 1.0 - smoothstep( 0.115, 0.215, min( hPx, hXZ ) ) );
-          // grid.js's own seam triple: a DARKENING in all three channels, warm side of
-          // neutral, so it is ink on the stone and never a lit wire on unlit rock. It lands on
-          // the ALBEDO, so the albedo-weighted ambient below carries it into shade too.
-          diffuseColor.rgb *= mix( vec3( 1.0 ), vec3( 0.400, 0.355, 0.310 ), hInk * 0.90 );
-          // ...and it claims the same protect mask the decal writes, or post.js's
-          // footprint-graded far mip filters the stroke off again after the rock has drawn it.
-          diffuseColor.a = min( diffuseColor.a, 1.0 - hInk * 0.85 );
           float rspec = ( 0.055 + 0.11 * snowAmt ) * ( 0.45 + 1.1 * rk4.a );  // sparkle, not gloss`)
         .replace('#include <normal_fragment_maps>', 'normal = normalize( mat3( viewMatrix ) * rN );')
         .replace('#include <specularmap_fragment>', 'float specularStrength = rspec;')
