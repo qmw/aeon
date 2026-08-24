@@ -1287,13 +1287,23 @@ const COMMON = /* glsl */`
     // not out-shout the land. Fading the open water into THAT makes distance run dark and
     // saturated, which reads as a vignette rather than as air, so the water fades into the same
     // hue at the level and chroma real airlight has: lighter than the sea and much greyer.
-    haze = mix(haze, vec3(dot(haze, LUMA)), 0.35) * 3.2 * vec3(0.93, 0.99, 1.12);
+    // ...and it is greyed HARD before it is used. The airlight the grade pass carries is a
+    // golden-hour haze, and a sea mixed 60% into that is not hazy, it is TAN — measured, one
+    // build with f = 0.72 came back with the whole ocean the colour of the beach. Air over
+    // water is a cool grey; take the level from the grade pass and leave the hue behind.
+    haze = mix(haze, vec3(dot(haze, LUMA)), 0.62) * 3.2 * vec3(0.88, 0.98, 1.17);
     // MEASURED (tools/_wprobe2.mjs): the gameplay rig sits 24 u up with a 30 deg FOV, so the
     // WHOLE frame lies between 26 and 38 world units. A ramp that starts at 85 is a ramp that
     // never fires — which is why the far sea measured 94 luma DARKER than the near sea instead
     // of lighter, with more saturation rather than less. Air works over the distance the frame
     // actually spans, so that is the range.
-    float f = smoothstep(29.0, 40.0, dist) * 0.55;
+    // MEASURED AGAIN, this time on the COMPOSITE (tools/_w8.mjs with fx.group hidden): the
+    // fog-of-war dim sheet is a flat 46% multiply over every explored-but-unseen tile, and on
+    // this frame that is the far ocean and not the near one — pre-fog the far sea is mean 166
+    // against the mid sea's 131 (lighter, as the rule wants), post-fog it is 100 against 105.
+    // The water cannot turn that layer off, so it has to out-run it: a stronger airlight over
+    // the eight world units the frame actually spans.
+    float f = smoothstep(28.5, 38.5, dist) * 0.58;
     // CHROMA GOES FIRST. Air eats saturation over a shorter run than it adds light, and the two
     // want different ramps here for a measured reason: the airlight has to stay off the near
     // water or it lifts the foreground as hard as the background and the depth gradient never
@@ -1305,7 +1315,7 @@ const COMMON = /* glsl */`
     // fog colour deliberately dark so the sea does not out-shout the land, so clamp here.
     float lc = dot(col, LUMA);
     haze *= clamp((lc * 1.55) / max(dot(haze, LUMA), 1e-4), 1.0, 6.0);
-    col = mix(col, vec3(lc), smoothstep(22.0, 40.0, dist) * 0.38);
+    col = mix(col, vec3(lc), smoothstep(23.0, 38.0, dist) * 0.40);
     return mix(col, haze, f);
   }
 `;
@@ -1370,9 +1380,9 @@ const OCEAN_FRAG = /* glsl */`
   // value band-pass off the height channel was tried and carries almost no energy: K_BLOB 8 to
   // 16 moved MID_rms under 3%.)
   const float K_GRAIN = 0.55;    // 1-4 px slope band   -> HF
-  const float K_MIDS  = 2.60;    // 5-20 px slope band  -> MID
-  const float K_BLOB  = 4.00;    // 10-35 px brightness band
-  const float K_CHOP  = 9.50;    // crest-train column shading -> MID
+  const float K_MIDS  = 3.80;    // 5-20 px slope band  -> MID
+  const float K_BLOB  = 3.80;    // 10-35 px brightness band, wind-aligned
+  const float K_CHOP  = 11.00;    // crest-train column shading -> MID
   const float K_LEVEL = 0.86;    // overall water brightness
 
   void main() {
@@ -1436,11 +1446,19 @@ const OCEAN_FRAG = /* glsl */`
     // uK1.w debug tap: with the trains alone the sea delivered MID 9.3 against HF 23, i.e. it
     // was a pixel field with waves hidden inside it, and no amount of crest gain fixed that
     // because a sharpened crest feeds the pixel window too.
-    vec2 bq = p + vec2(0.423, 0.906) * (uTime * 0.06);
+    // ...and it is sampled in the WIND'S OWN FRAME, stretched 2.6:1 down the wind. An
+    // isotropic brightness band at 10-35 px IS cottage cheese — measured with the fog sheet
+    // hidden, the raw sea was a mat of pale cells with no direction in it at all, and that mat
+    // is what four passes of this file have been rejected for. Stretched, the same energy lands
+    // in the metric's MID window as long PATCHES lying along the swell, which is what a real
+    // sea's wind texture does. (The no-stretch rule in wave() above is about the 1-3 px
+    // octaves, where a stretch reads as combing; at ten times that size it reads as fetch.)
+    vec2 bw = vec2(0.423, 0.906);
+    vec2 bq = vec2(dot(p, bw) * 0.38, dot(p, vec2(-bw.y, bw.x))) + vec2(uTime * 0.06, 0.0);
     float blob = texture2D(uNoise, bq * (1.0 / 3.00) + 0.21, 2.2).b
                - texture2D(uNoise, bq * (1.0 / 3.00) + 0.21, 4.0).b;
     // soft-capped like the crest gain, for the same reason: a clipped blob band is a stencil
-    blob = blob * K_BLOB; blob = blob / sqrt(1.0 + blob * blob / 0.3600);
+    blob = blob * K_BLOB; blob = blob / sqrt(1.0 + blob * blob / 0.2500);
 
     // Each octave is alive while its own tile is more than about six pixels across.
     float f2 = 1.0 - smoothstep(2.55 * 0.055, 2.55 * 0.150, px);
@@ -1482,23 +1500,34 @@ const OCEAN_FRAG = /* glsl */`
     float k2 = 1.0 - smoothstep(0.055, 0.128, px);
     float k3 = 1.0 - smoothstep(0.030, 0.070, px);
     float k4 = 1.0 - smoothstep(0.017, 0.042, px);
-    vec3 t1 = train(p, vec2( 0.423, 0.906), 0.620, 0.30, 0.30 * chopK, 2.6, 0.20) * k1;
-    vec3 t2 = train(p, vec2( 0.174, 0.985), 0.340, 0.23, 0.34 * chopK, 2.0, 0.25) * k2;
-    vec3 t3 = train(p, vec2( 0.643, 0.766), 0.185, 0.17, 0.26 * chopK, 2.0, 0.30) * k3;
-    vec3 t4 = train(p, vec2( 0.309, 0.951), 0.105, 0.12, 0.16 * chopK, 2.2, 0.35) * k4;
-    float chop = t1.x * 0.30 + t2.x * 0.34 + t3.x * 0.24 + t4.x * 0.12;
+    vec3 t1 = train(p, vec2( 0.423, 0.906), 0.620, 0.30, 0.36 * chopK, 2.6, 0.20) * k1;
+    vec3 t2 = train(p, vec2( 0.174, 0.985), 0.340, 0.23, 0.38 * chopK, 2.0, 0.25) * k2;
+    vec3 t3 = train(p, vec2( 0.643, 0.766), 0.185, 0.17, 0.20 * chopK, 2.0, 0.30) * k3;
+    vec3 t4 = train(p, vec2( 0.309, 0.951), 0.105, 0.12, 0.11 * chopK, 2.2, 0.35) * k4;
+    // WEIGHTED ONTO THE LONG TRAINS. 34 and 19 screen pixels are the window the eye reads a
+    // swell in and the window the metric calls MID; 10 and 6 px are the window it calls grain.
+    // The old split put a third of the crest energy on the two short trains, which is most of
+    // why the sea measured MID/HF under 1 and read as fizz with waves hidden inside it.
+    float chop = t1.x * 0.38 + t2.x * 0.36 + t3.x * 0.18 + t4.x * 0.08;
     // ...and its DC, which fades with the SAME weights. Every consumer below uses (chop - mean);
     // leaving the mean constant while chop itself decays with distance darkens the far sea for
     // no reason but a bookkeeping error.
-    float chopDC = 0.845 * (0.332 * 0.30 * k1 + 0.375 * 0.34 * k2 + 0.375 * 0.24 * k3 + 0.359 * 0.12 * k4);
+    float chopDC = 0.845 * (0.332 * 0.38 * k1 + 0.375 * 0.36 * k2 + 0.375 * 0.18 * k3 + 0.359 * 0.08 * k4);
     // SOFT saturation, never a clamp. The crest gain has to be big — the wave bands are the
     // sea's read and they live in the 14-34 px window the eye actually looks at — but a hard
     // clamp on a big gain turns a wave profile into a square wave: it squares off the crest,
     // dumps the missing energy into harmonics (i.e. into pixel-scale fizz) and drives the
     // troughs into the crush floor. This saturates at +1.5 / -0.48 with a continuous slope.
     float cmR = (chop - chopDC) * K_CHOP * uK0.y;
-    float cm = cmR > 0.0 ? cmR / sqrt(1.0 + cmR * cmR / 2.25)
+    float cm = cmR > 0.0 ? cmR / sqrt(1.0 + cmR * cmR / 2.2500)
                          : 0.48 * cmR / sqrt(1.0 + cmR * cmR / 0.2304);
+    // ...and SHALLOW WATER GETS LESS OF IT. Over a sand shelf nine tenths of the pixel is
+    // transmitted bed light, so a crest gain that reads as a wave over the deep reads as a
+    // white flake over the shallows — measured, the whole shelf at Aurelia came back as a mat
+    // of 20-30 px cream cornflakes with no blue left in it. A wave over sand shows itself in
+    // the CAUSTIC net on the bottom, not by doubling the brightness of the water above it.
+    float shoalShade = mix(0.26, 1.0, smoothstep(0.08, 1.05, depth));
+    cm *= shoalShade; blob *= shoalShade;
 
     // Slope budget. The octaves are RMS-normalised in buildNoiseTexture, so each contributes the
     // same slope whatever it is tiled at and these weights ARE the spectrum shape. They fall
@@ -1591,14 +1620,18 @@ const OCEAN_FRAG = /* glsl */`
     // and headings interfere, and the ridge where they agree is exactly the focus line a wave
     // lens throws down. Depth-GATED, not painted: nothing survives past the top ~0.6 m of the
     // column, so the shelf and the deep are different materials rather than one lightness ramp.
+    // TILED FINE AND CUT THIN. At 1.9 / 1.15 u the interference figure between the two fields
+    // is 20-40 SCREEN PIXELS across, which is not a caustic net, it is a cream cornflake — the
+    // shelf's other blob source. A caustic is the focus LINE of a wave lens: decimetre-scale,
+    // and thin. Half the tile, a harder cut, and the ridge comes out as a net.
     vec2 cD = p + vec2(0.31, -0.95) * (uTime * 0.055);
-    float ca1 = texture2D(uNoise, cD * (1.0 / 1.90), 1.5).b;
-    float ca2 = texture2D(uNoise, (p * mat2(0.62, 0.78, -0.78, 0.62) + vec2(-0.87, 0.49) * (uTime * 0.040)) * (1.0 / 1.15), 1.5).b;
-    float caus = pow(max(0.0, 1.0 - abs(ca1 - ca2) * 9.0), 3.0);
+    float ca1 = texture2D(uNoise, cD * (1.0 / 0.95), 0.9).b;
+    float ca2 = texture2D(uNoise, (p * mat2(0.62, 0.78, -0.78, 0.62) + vec2(-0.87, 0.49) * (uTime * 0.040)) * (1.0 / 0.58), 0.9).b;
+    float caus = pow(max(0.0, 1.0 - abs(ca1 - ca2) * 14.0), 3.0);
     // ~0.6 px of chromatic split: a caustic is refracted light and its edges are dispersive.
-    float causR = pow(max(0.0, 1.0 - abs(texture2D(uNoise, (cD + vec2(0.016, 0.011)) * (1.0 / 1.90), 1.5).b - ca2) * 7.5), 3.0);
+    float causR = pow(max(0.0, 1.0 - abs(texture2D(uNoise, (cD + vec2(0.014, 0.009)) * (1.0 / 0.95), 0.9).b - ca2) * 11.5), 3.0);
     // ...and they gather UNDER THE CRESTS, because a caustic IS the focus line of a wave lens.
-    caus *= 0.24 + 1.55 * smoothstep(0.12, 0.72, chop);
+    caus *= 0.34 + 1.05 * smoothstep(0.12, 0.72, chop);
     float causA = smoothstep(1.35, 0.03, depth) * clamp(uSun.y * 2.4, 0.0, 1.0)
                 * (1.0 - 0.30 * vLake) * mix(0.35, 1.0, f2);
     caus *= causA;
@@ -1799,10 +1832,15 @@ const OCEAN_FRAG = /* glsl */`
     // and saturation 0.17, i.e. white. Each band gets its own soft saturation instead, so the
     // darkest a trough can go is 0.13 of its own colour and the hue never moves.
     float aRef = mix(Lref, Lc, 0.16) / max(Lc, 1e-5);
-    float gA = clamp(grain, -0.70, 0.70) * K_GRAIN * uK0.x * aRef * mix(0.82, 1.0, vBody) * mix(0.35, 1.0, f3);
-    float gB = clamp(midS,  -0.80, 0.80) * K_MIDS  * uK0.w * aRef * mix(0.82, 1.0, vBody) * mix(0.55, 1.0, f2);
+    // ...and BOTH bands ride shoalShade with the crest gain, for the reason written up there:
+    // over a sand shelf the pixel is transmitted bed light, and a +-100% band on THAT is a
+    // cream cornflake rather than a wave. The deep keeps the full budget, which is where the
+    // metric's MID window is measured and where a wave band actually reads as a wave.
+    float shoalBand = mix(0.40, 1.0, shoalShade);
+    float gA = clamp(grain, -0.70, 0.70) * K_GRAIN * uK0.x * aRef * mix(0.82, 1.0, vBody) * mix(0.35, 1.0, f3) * shoalBand;
+    float gB = clamp(midS,  -0.80, 0.80) * K_MIDS  * uK0.w * aRef * mix(0.82, 1.0, vBody) * mix(0.55, 1.0, f2) * shoalBand;
     gA = gA / sqrt(1.0 + gA * gA / 0.3844);          // saturates at +-0.62
-    gB = gB / sqrt(1.0 + gB * gB / 0.9025);          // saturates at +-0.95
+    gB = gB / sqrt(1.0 + gB * gB / 1.2100);          // saturates at +-1.10
     // ...and the SUM gets its own knee, ASYMMETRIC, because the two sides are not the same
     // problem. A crest may run three times its own trough and nothing downstream minds; a trough
     // that reaches -1 takes the pixel NEGATIVE, the framebuffer clips it, and the whole negative
