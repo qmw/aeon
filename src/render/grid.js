@@ -319,15 +319,15 @@ void main() {
     // warm rock, leaves a residue that is almost pure blue. Measured: the surviving strokes over
     // the mountains came back navy. Same luminance (0.360), warm side of neutral, so the line is
     // ink on the ground everywhere instead of ink on grass and a blue wire on rock.
-    // ...and the stroke ADAPTS TO THE MATERIAL UNDER IT. A fixed multiplier gives the same
+    // ...and the stroke ADAPTS TO THE SURFACE UNDER IT. A fixed multiplier gives the same
     // RATIO everywhere, and a ratio is not a read: on smooth sand a 30% dip is the only edge
-    // for twenty pixels either side, while on the massif — scree, strata, a fracture net, all
-    // of it running at 15 HF_rms — the same dip lands inside the rock's own local contrast and
-    // the eye never finds the line. Rock is the one surface that needs the stroke to beat a
-    // busy material, so it gets a deeper multiplier and half a pixel more core. Still ONE
-    // stroke, one profile, and still a darkening in all three channels.
-    vec3 seamK = mix(vec3(0.400, 0.355, 0.310), vec3(0.292, 0.256, 0.220), vRock);
-    MUL(seamK, (1.0 - smoothstep(1.00 + 0.45 * vRock, 2.00 + 0.45 * vRock, dp)) * g * mix(1.16, 0.94, lit))
+    // for twenty pixels either side, while on the massif — scree, strata and a fracture net
+    // all running at ~15 HF_rms — the same dip lands inside the rock's own local contrast and
+    // the eye never finds the line. Rock is the one surface where the stroke has to beat a
+    // busy material, so the rough tiles get a deeper multiplier. Still ONE stroke, one
+    // profile, still a darkening in all three channels, and still the same 2 px of core.
+    vec3 seamK = mix(vec3(0.400, 0.355, 0.310), vec3(0.318, 0.280, 0.242), vRock);
+    MUL(seamK, (1.0 - smoothstep(1.00, 2.00, dp)) * g * mix(1.16, 0.94, lit))
   }
   // ALPHA IS NOT OPACITY HERE — it is the DECAL PROTECT MASK, and it is the other half of
   // "the hex grid is nearly invisible". post.js's present pass applies a footprint-graded mip
@@ -575,15 +575,8 @@ export class Grid {
       // beaten by anything a player can see standing on a hex — correct on grass, hopeless
       // against a boulder field — so the massif came back with a broken stipple where its grid
       // should be, which is standing reject #1 and a whole biome the player cannot count.
-      // ...and that bias is now 0.25, not 1.25, because THE ROCK DRAWS ITS OWN HALF OF THE
-      // LINE. terrain.js's rock material evaluates the same axial->world lattice at its own
-      // world XZ, so the massif's stroke is painted on the summit geometry where the player is
-      // looking instead of on the ground two units under it. A big view-space bias here is the
-      // opposite fix and an actively wrong one: it punches the GROUND's line through the loft
-      // in front of it, at the ground's XZ, which rasterises as a stray rod lying across the
-      // rock at the wrong place. Small enough that anything standing on a hex still occludes
-      // the ground line, and the rock hands it straight back.
-      const bias = rough ? 0.25 : 0;
+      // A rough tile gets a bias sized to the props that stand on it instead.
+      const bias = rough ? 1.25 : 0;
 
       const key = ((t.q / CH_Q) | 0) * 64 + ((t.r / CH_R) | 0);
       let ch = chunks.get(key);

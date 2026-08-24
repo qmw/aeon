@@ -1383,14 +1383,7 @@ const OCEAN_FRAG = /* glsl */`
   const float K_MIDS  = 3.80;    // 5-20 px slope band  -> MID
   const float K_BLOB  = 3.80;    // 10-35 px brightness band, wind-aligned
   const float K_CHOP  = 11.00;    // crest-train column shading -> MID
-  // 0.86, and DO NOT reach for this to deepen the open sea. It was taken to 0.68 to put the
-  // ocean on the bible's #123A63 and measured, on the delivered frame, a 1% change: past the
-  // shelf the pixel is not in-scatter at all, it is the sky in the fresnel term below (which
-  // runs to 0.34 once a pixel is wider than the ripples in it). Darkening THAT is the one
-  // thing that must not be done — the far sea being brighter than the near sea is the open
-  // ocean's only gradient and it is the aerial perspective rule, so the fix has to come from
-  // the sky, not from here.
-  const float K_LEVEL = 0.86;    // deep-water in-scatter level
+  const float K_LEVEL = 0.86;    // overall water brightness
 
   void main() {
     vec3 toCam = cameraPosition - vWorld;
@@ -1718,12 +1711,7 @@ const OCEAN_FRAG = /* glsl */`
     // against a normal field carrying centimetre ripples selects the CONTOUR where those ripples
     // face the sun, and a broad lobe on a contour draws broad pale squiggles.
     vec3 NM = normalize(vec3(vGN.x + t1.y + t2.y, vGN.y, vGN.z + t1.z + t2.z));
-    // The sheen's streak modulation is HALVED in depth at the same mean (0.72 + 0.42, not
-    // 0.55 + 0.70). streak is one 96 x 44 u anisotropic field, so whatever contrast it is
-    // given it hands back as the SAME light-and-dark bars in the same places every hex — the
-    // repeating streaky specular read on open water. The sheen still has an along-swell
-    // grain; it no longer has a period a player can count.
-    vec3 spec = sunSpec(NM, V, H, 0.26, 0.075 * path * (0.72 + 0.42 * streak))
+    vec3 spec = sunSpec(NM, V, H, 0.26, 0.075 * path * (0.55 + 0.70 * streak))
               + sunSpec(N, V, H, rough, (0.230 * track + 0.008) * (0.35 + 0.90 * streak)
                         * (0.60 + 1.10 * smoothstep(0.30, 0.92, chop))
                         * mix(0.55, 1.0, f3)
