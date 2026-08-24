@@ -1244,6 +1244,16 @@ export class Terrain {
           // ramp with a footprint gate and got it backwards; the ramp that survives is a
           // MATERIAL one — sand is grain at arm's length, a massif is a mass — so put the fine
           // energy on the material that is near and take it off the one that is far.
+          // DISTANCE-SCALED AMPLITUDE, off the one distance on this board that actually varies.
+          // MEASURED (tools/_thdist.mjs) on the gameplay rig: EYE depth spans 25.7 to 33.9 over
+          // the whole visible frame — 1.3x, which is why every footprint gate in this file came
+          // out non-monotonic and five passes bought the near/far ramp backwards. The HORIZONTAL
+          // distance from the rig spans 9.8 in the foreground to 24.1 at the back of the board:
+          // 2.5x, monotone in screen depth, and a real world-space quantity rather than a screen
+          // one. So the mip chain filters the texture and this fades its AMPLITUDE, which is
+          // what makes near sand grain and a far massif a mass instead of one confetti field
+          // stretched over both.
+          float lodH = 1.0 - smoothstep( 8.0, 20.0, length( vWP.xz - cameraPosition.xz ) );
           float up = abs( wn.y );
           float flatness = smoothstep( 0.30, 0.78, up );
           float wall = vInfo.y;
@@ -1447,7 +1457,7 @@ export class Terrain {
           // 0.268 here multiplied the two bands above it and the product was then SQUARED by
           // the gamma-2 lift: a ~28% luminance swing of pale blotch on 24-290 px cells, which
           // is the measured near-field MID/HF 1.40 and the "blurry blobs, no material" read.
-          gCol *= 0.916 + 0.168 * gMeso;                                // +-8.4%   <- MACRO ALBEDO
+          gCol *= 0.930 + 0.140 * gMeso;                                // +-7%     <- MACRO ALBEDO
           // The two finest bands are worth ~17% each, not 35%. The gate is now full across the
           // whole near field, and 35% on a 6 px band, SQUARED by the gamma-2 lift at the end of
           // this shader, is a field of blown white specks — cottage cheese, not sward. Detail
@@ -1457,7 +1467,7 @@ export class Terrain {
           // in the near field only — which is where detail is allowed to be, and where the
           // near/far ramp has to be earned.
           gCol *= mix( 1.0, 1.0 + ( gMic - 0.5 ) * 0.20 * gGate, dNear );
-          gCol *= 1.0 + ( gFin - 0.5 ) * 0.13 * dClose * gGate;
+          gCol *= 1.0 + ( gFin - 0.5 ) * 0.20 * mix( 0.32, 1.0, lodH ) * gGate;
           // The macro band's job is HUE, not value: blue-green swale to yellow-green rise,
           // about 7 degrees apart at matched luminance. Half the old swing — 1.050/0.916 across
           // R and B was a 14% chroma push, and against warm sand that is the acid-green read.
@@ -1496,7 +1506,7 @@ export class Terrain {
           // bands below all MULTIPLY and the product is then squared by the gamma-2 lift, so
           // 0.258 here lands as a 55% luminance swing on screen: pale cell blobs on tan, i.e.
           // the measured near-sand MID/HF 1.40 and the "blurry blobs, no material" read.
-          sCol *= 0.932 + 0.126 * smoothstep( 0.20, 0.78, nMes.a );                   // 290-24 px
+          sCol *= 0.940 + 0.110 * smoothstep( 0.20, 0.78, nMes.a );                   // 290-24 px
           // grain, not a crack network: blending the cellular A channel halfway into the smooth
           // B one is what stops the near sand reading as dried mud instead of sand.
           float sGrain = smoothstep( 0.12, 0.88, nMic.a );                            // 330-10 px (MID)
@@ -1507,8 +1517,13 @@ export class Terrain {
           // near/far ramp the gate measures, bought where it is honest instead of everywhere.
           // Sand's finest band runs UNGATED — the mip chain is its LOD and, at this framing,
           // the footprint gate would only hand the midfield more grain than the foreground.
-          sCol *= 1.0 + ( gFin - 0.5 ) * 0.70 * gGate;                                  // quartz, 3 px
-          sCol *= 1.0 - smoothstep( 0.22, 0.03, sharp( nFin.a, 2.6 ) ) * 0.36;          // dark grains
+          // ...and it runs UNGATED, which is the one thing a 3 px band must never do: measured
+          // mid-sand HF_rms 22.7 against a 22 ceiling while the FOREGROUND measured 20.7 — the
+          // ramp inverted by the one band that is the same size in every pixel of the frame.
+          // The near field's grain comes from the clutter layer and the mip chain, not from
+          // here, so this pair pays the whole ticket and the foreground barely notices.
+          sCol *= 1.0 + ( gFin - 0.5 ) * 0.68 * mix( 0.38, 1.0, lodH ) * gGate;         // quartz, 3 px
+          sCol *= 1.0 - smoothstep( 0.22, 0.03, sharp( nFin.a, 2.6 ) ) * 0.30 * mix( 0.38, 1.0, lodH );  // dark grains
           // grit: darker grains of the SAME hue, gated into fields by the macro mask, so a
           // beach is never leopard print
           float gvl = smoothstep( 0.36, 0.74, nMes.a * 0.6 + nVar.b * 0.4 ) * dNear;
@@ -1524,7 +1539,10 @@ export class Terrain {
           // Bedding, one band per resolvable scale and each faded out where it stops being one.
           // 1.21 u beds carry the read; the 0.37 u laminae only exist in the near field; the
           // 1.61 u marker bed is the coarse rhythm that survives to the back of the frame.
-          float sbP = fract( vWP.y * 1.613 + bedX * 0.95 + nVar.b * 0.18 );                      // 0.62 u beds, 20 deg dip
+          // see the note in _rockMaterial: a bedding phase that is mostly world Y is a level
+          // set of the height field, i.e. a contour ring, and 0.95 here was a 24 degree dip
+          // against 45 degree ground. 2.05 is a 44 degree dip, which cuts across the slope.
+          float sbP = fract( vWP.y * 1.613 + bedX * 2.05 + nVar.b * 0.18 );                     // 0.62 u beds, 44 deg dip
           float strata  = smoothstep( 0.0, 0.30, sbP ) * ( 1.0 - smoothstep( 0.86, 1.0, sbP ) );
           float fineBed = 0.5 + 0.5 * sin( vWP.y * 29.9 + bedX * 5.7 + nMac.b * 1.30 );            // 0.21 u
           float beds = smoothstep( 0.38, 0.62, fract( vWP.y * 0.42 + bedX * 0.34 + nVar.b * 0.35 ) ); // 2.4 u marker
@@ -1567,7 +1585,7 @@ export class Terrain {
           // A 3 px feature contributes ~1.0 to HF_rms and ~0.12 to MID_rms, so this is the one
           // band that keeps a far massif from mipping down to a painted plate without adding
           // any of the blur the metric reads as structureless.
-          rCol *= 1.0 + ( gFin - 0.5 ) * 0.52 * mix( 0.55, 1.0, dClose )
+          rCol *= 1.0 + ( gFin - 0.5 ) * 0.44 * mix( 0.38, 1.0, lodH ) * mix( 0.55, 1.0, dClose )
                       + ( smoothstep( 0.16, 0.84, nMic.a ) - 0.5 ) * 0.06 * dNear;
           rCol = mix( rCol, rCol * vec3( 0.86, 1.06, 0.79 ), nMac.b * 0.30 * ( 1.0 - wall ) );   // lichen
           // talus: a gravel wash over the bottom third only, so it grounds the cut without
@@ -1598,7 +1616,7 @@ export class Terrain {
           // feature's high-pass gain is 0.02 against 0.9 for a 3 px one — which is exactly why
           // structure has to be bought here and not by turning the fine taps up.
           float mLo = smoothstep( 0.18, 0.82, nMes.a * 0.62 + nMes.b * 0.38 );
-          col *= 1.0 + ( mLo - 0.5 ) * 0.105 * ( 1.0 - wRock * 0.72 );
+          col *= 1.0 + ( mLo - 0.5 ) * 0.090 * ( 1.0 - wRock * 0.72 );
           col *= mix( vec3( 0.985, 0.994, 1.010 ), vec3( 1.018, 1.002, 0.976 ), mLo );
           // A SECOND macro band, one octave coarser and pure value: 78-1080 px shapes — swales,
           // soil sheets, the pale rise on a dune field. This is the band MID_rms is a band-pass
@@ -1608,7 +1626,7 @@ export class Terrain {
           // then SQUARED by the gamma-2 lift: a ~60% luminance swing on 78-1080 px shapes, which
           // is cream blotches on chocolate rather than a swale. ~0.12 luminance is what the
           // bible asks of macro breakup, and it is what keeps MID/HF inside 0.9-1.3.
-          col *= 1.0 + ( smoothstep( 0.20, 0.80, nMac.b * 0.55 + nMac.a * 0.45 ) - 0.5 ) * 0.150 * ( 1.0 - wRock * 0.55 );
+          col *= 1.0 + ( smoothstep( 0.20, 0.80, nMac.b * 0.55 + nMac.a * 0.45 ) - 0.5 ) * 0.122 * ( 1.0 - wRock * 0.55 );
 
           // wet sand and riparian mud darken and warm rather than going grey
           col *= mix( vec3( 1.0 ), vec3( 0.700, 0.628, 0.522 ), wet * ( 1.0 - wSnow ) );
@@ -1625,6 +1643,12 @@ export class Terrain {
           // and a desaturated curb painted just inside every hex was the second half of the
           // double-drawn edge that read as laser-cut plates.
 
+          // AERIAL PERSPECTIVE, hue leg — see the note in _rockMaterial. Multiplier, not a
+          // mix toward a haze colour: the far field is the massif, its HF sits on the metric's
+          // floor, and a constant mixed into it would take the material's contrast with the
+          // chroma. Nothing moves in the foreground; the back of the board rotates ~10 degrees
+          // off warm, which is the cool direction on this palette without a blue pixel in it.
+          col *= mix( vec3( 1.0 ), vec3( 0.986, 1.064, 1.010 ), 1.0 - lodH );
           col = mix( vec3( dot( col, vec3( 0.2126, 0.7152, 0.0722 ) ) ), col, 1.07 );
           diffuseColor.rgb *= col * col;   // gamma 2.0: pow() is dear in software GL`)
         .replace('#include <specularmap_fragment>', /* glsl */`
@@ -1675,7 +1699,7 @@ export class Terrain {
           // term, so lifting the shadow does not rotate its hue toward blue.
           reflectedLight.indirectDiffuse += material.diffuseColor
             * ( skyC * ( 0.60 + 0.14 * wall - 0.26 * wRock ) * mix( 0.58 - 0.06 * wRock, 1.0, lit )
-              + bounce * ( 1.04 + 0.54 * wRock ) * mix( 0.44 + 0.30 * wRock, 1.0, lit ) );`);
+              + bounce * ( 1.04 + 0.34 * wRock ) * mix( 0.44 + 0.30 * wRock, 1.0, lit ) );`);
     };
     return m;
   }
@@ -1773,17 +1797,18 @@ export class Terrain {
         }
       }
 
-      // ---- summits: one loft per HIGH tile, and IT HAS TO FIT INSIDE ITS OWN HEX.
-      //      This used to be a 1.56-2.40 radius stretched up to 1.58x on half the tiles, i.e. a
-      //      rock mass 2-4 hexes across sitting on every other summit. Two measured defects came
-      //      straight out of that footprint and nothing else: (1) the hex lattice is drawn on the
-      //      GROUND surface and depth-tests against whatever stands on it, so a loft that laps
-      //      over its neighbours' rims erases the grid across the entire massif — the standing
-      //      "no hex edges anywhere on the mountains" reject; (2) adjacent lofts interpenetrated,
-      //      which is the faceted self-intersecting shell read. One loft per tile at a footprint
-      //      inside the hex flat radius (0.866) keeps the same rock on the range — the tiles that
-      //      used to be bare now carry their own — and gives every hex a countable rim back.
-      if (HIGH(t)) {
+      // ---- summits: broad ridge masses, laid ALONG THE CONTOUR of the massif (perpendicular
+      //      to the local height gradient), so neighbouring summits chain into buttresses and a
+      //      crest line instead of a bed of nails. Only some tiles carry one; the rest are the
+      //      massif body, and letting the surface show through is what gives the range scale.
+      //      SIZE IS THE RANGE. The previous pass shrank every loft to fit inside its own hex
+      //      flat radius to stop the rock occluding the lattice, and what came back was a field
+      //      of separate chips standing on visible hex benches — no mass, no crest line, and the
+      //      far massif measured 19 luma DARKER than the near sand, i.e. aerial perspective
+      //      running backwards. The occlusion is real, but the fix for it belongs in the rock
+      //      shader (see _rockMaterial: the lattice is a function of world XZ, so rock can draw
+      //      its own half of it and CONFORM over the cliff) and not in the silhouette.
+      if (HIGH(t) && (!this._notTop(i) || hash2(t.q, t.r, 4441) < 0.52)) {
         let gx = 0, gz = 0, nbSum = 0, nbN = 0;
         for (let d = 0; d < 6; d++) {
           const o = map.get(t.q + DIRS[d].q, t.r + DIRS[d].r);
@@ -1800,26 +1825,17 @@ export class Terrain {
         const alt = clamp01((this.surfY[i] - this.maxH * 0.42) / (this.maxH * 0.5));
         // 40m swell over the massif, so the skyline has shoulders and summits, not one plateau
         const swell = 0.55 + 1.05 * fbm2(p.x * 0.055, p.z * 0.055, { octaves: 2, seed: 4241 });
-        // Sized off the loft's VISIBLE footprint, not its base ring: the skirt is buried 0.45
-        // under the tile so the rock only breaks ground around rr < 0.65, i.e. ~0.6 of the
-        // instance scale. At 1.0-1.2 that lands the rock inside the 0.866 hex flat radius —
-        // the tile interior is covered (which is what hides the hex-plateau staircase under a
-        // massif) and the rim is clear (which is what lets the lattice be read on rock).
-        const rad = 1.04 + 0.20 * h1;
-        // h2^3 makes the tall summits rare: most tiles are shoulders, a few are the hero peaks.
-        // The mass the wide shells used to carry comes back as HEIGHT — a narrower loft that
-        // kept the old height would be a spike, and one that kept neither is a hex bench with
-        // gravel on it. Every HIGH tile now carries one, so the range is continuous rock.
-        const hgt = (1.42 + 3.55 * h2 * h2 * h2) * (0.56 + 0.90 * alt) * (0.58 + 0.78 * prom) * swell;
-        const stretch = 0.90 + 0.22 * h3 * h3;   // some summits pull out into a wall
+        const rad = 1.56 + 0.84 * h1;
+        // h2^3 makes the tall summits rare: most tiles are shoulders, a few are the hero peaks
+        const hgt = (1.18 + 3.05 * h2 * h2 * h2) * (0.50 + 0.95 * alt) * (0.55 + 0.80 * prom) * swell;
+        const stretch = 0.72 + 0.86 * h3 * h3;   // some summits pull out into a wall
         // slightly elongated along the contour, so a slope grows buttresses instead of pimples.
         // yaw is negated: a +Y rotation carries local +X to (cos, 0, -sin)
-        const ox = (h1 - 0.5) * 0.17, oz = (h3 - 0.5) * 0.17;   // stays clear of its own rim
-        ridges.push(p.x + ox, this.centreY[i] - 0.45 - 0.10 * hgt, p.z + oz,
+        ridges.push(p.x + (h1 - 0.5) * 0.55, this.centreY[i] - 0.45 - 0.10 * hgt, p.z + (h3 - 0.5) * 0.55,
           rad * stretch, hgt, rad / Math.sqrt(stretch) * 0.86,
           -theta + (h3 - 0.5) * 0.7, (h1 - 0.5) * 0.10, h2, i);
         this.cullR[i] = Math.max(this.cullR[i], 3.2 + hgt + rad * stretch);
-        this._stamp(p.x + ox, p.z + oz, rad * 1.40, 0.28, 0, 1.1);
+        this._stamp(p.x + (h1 - 0.5) * 0.55, p.z + (h3 - 0.5) * 0.55, rad * 0.95, 0.46, 0, 1.5);
       }
 
       // ---- boulders on hills and bare high ground
@@ -1902,6 +1918,17 @@ export class Terrain {
     if (this.ridgeMesh) this.group.add(this.ridgeMesh);
     if (this.rockMesh) this.group.add(this.rockMesh);
     this.rockMat = rockMat;
+  }
+
+  // True when some HIGH neighbour clearly overtops this tile: only the local maxima of the
+  // massif carry a summit loft, so the range reads as a crest line instead of a bed of nails.
+  _notTop(i) {
+    const t = this.map.tiles[i];
+    for (const d of DIRS) {
+      const o = this.map.get(t.q + d.q, t.r + d.r);
+      if (o && this.surfY[o.i] > this.surfY[i] + 0.50) return true;
+    }
+    return false;
   }
 
   // -------------------------------------------------------------- tile information
@@ -2295,6 +2322,11 @@ export class Terrain {
           // aniso on the sampler is what stops combing; this only takes the edge off.
           float rNear = smoothstep( 3.0, 6.5, 0.1438 / rmpp ) * mix( 0.60, 1.0, smoothstep( 0.10, 0.55, rIso ) );
           float rFin  = smoothstep( 2.0, 4.4, 0.0547 / rmpp ) * mix( 0.35, 1.0, smoothstep( 0.18, 0.70, rIso ) );
+          // ...and the horizontal-distance ramp the ground shader runs (see lodH there). A
+          // massif sits at 19-24 u horizontally and a boulder in the foreground at 10, so this
+          // is what keeps the near scree grainy and the range a mass.
+          float rNearD = 1.0 - smoothstep( 8.0, 20.0, length( vRWP.xz - cameraPosition.xz ) );
+          rFin *= mix( 0.42, 1.0, rNearD );
           vec4 rk1 = texture2D( uNoise, pY * 0.034 );                                     // 1030-129 px
           vec4 rk2 = tri( uNoise, pX * 0.167, pY * 0.167, pZ * 0.167, tw, 0.0 );          //  210-26 px
           vec4 rk3 = tri( uDet, pX * 0.2174 + vec2( 0.37, 0.61 ), pY * 0.2174 + vec2( 0.37, 0.61 ),
@@ -2306,7 +2338,7 @@ export class Terrain {
           // is what MID_rms is a band-pass on, and a massif carrying all of its relief there
           // measures as structureless blur however much of it there is.
           vec2 rg = ( rk2.rg - 0.5 ) * 0.72 + ( rk3.rg - 0.5 ) * 0.58 * rNear + ( rk1.rg - 0.5 ) * 0.40
-                  + ( rk4.rg - 0.5 ) * 1.40 * rFin;
+                  + ( rk4.rg - 0.5 ) * 1.00 * rFin;
           vec3 rUp = mix( vec3( 0.0, 1.0, 0.0 ), vec3( 0.0, 0.0, 1.0 ), step( 0.80, abs( rwn.y ) ) );
           vec3 rTg = normalize( cross( rUp, rwn ) + vec3( 1e-5, 0.0, 0.0 ) );
           vec3 rN = normalize( rwn + ( rTg * rg.x + cross( rwn, rTg ) * rg.y ) * 1.05 );
@@ -2325,7 +2357,15 @@ export class Terrain {
           rBed *= rTilt; rLam *= rTilt;
           // A bedding plane is an EDGE. Sawtooth the phase and smoothstep it and each bed gets
           // a crisp top and a graded base — the read a sinusoid cannot give at any amplitude.
-          float bedP = fract( vRWP.y * 1.613 + rDip * 0.308 );                       // 0.62 u beds
+          // DIP HAS TO BEAT THE SLOPE. A bedding phase that is mostly world Y is a level set of
+          // the height field, and a level set painted on a cone is a CONTOUR RING — the terraced
+          // banding stacked round every summit in this frame, and the arithmetic of a 20 degree
+          // dip on a 45 degree flank. At 0.655 the horizontal term is 1.57 against 1.61 of Y,
+          // i.e. a 44 degree dip: the beds now run parallel to one flank and cut steeply across
+          // the other, which is what dipping strata look like on a peak. The 33 u fold stops the
+          // whole massif sharing one perfectly planar attitude.
+          float bedP = fract( vRWP.y * 1.613 + rDip * 0.655
+                            + sin( vRWP.x * 0.19 - vRWP.z * 0.11 ) * 0.42 );        // 0.62 u beds
           float bedS = smoothstep( 0.0, 0.30, bedP ) * ( 1.0 - smoothstep( 0.86, 1.0, bedP ) );
           float band = mix( 0.5, bedS, rBed )
                      * mix( 1.0, 0.80 + 0.40 * ( 0.5 + 0.5 * sin( vRWP.y * 29.9 + rDip * 5.7 ) ), rLam );   // 0.21 u laminae
@@ -2339,19 +2379,19 @@ export class Terrain {
           // #c6a67c, sat 0.373 val 0.776 — twice the chroma ceiling, sharing the sand's tint.
           vec3 rock = mix( vec3( 0.214, 0.178, 0.132 ), vec3( 0.590, 0.486, 0.346 ),
                            rk1.b * 0.40 + rk2.b * 0.44 + rk4.b * 0.16 );
-          rock *= 0.68 + 0.62 * band;                          // strata
+          rock *= 0.74 + 0.50 * band;                          // strata
           // Mineral staining block to block: iron-warm on one bed, grey-cool on the next.
           // Chroma BETWEEN blocks, not chroma in the base, is how rock reads grey and still
           // carries a saturation signal.
-          rock *= mix( vec3( 1.215, 0.986, 0.775 ), vec3( 0.882, 0.984, 1.126 ),
+          rock *= mix( vec3( 1.152, 0.992, 0.842 ), vec3( 0.918, 0.988, 1.088 ),
                        smoothstep( 0.26, 0.86, band * 0.70 + rk1.b * 0.22 + rk2.b * 0.16 ) );
           rock = mix( rock, vec3( 0.268, 0.254, 0.234 ), smoothstep( 0.30, 0.0, local ) * 0.62 );   // scree skirt
           rock *= 0.944 + 0.112 * smoothstep( 0.22, 0.80, rk2.a );        // 30 px block scatter
           rock *= 0.948 + 0.104 * smoothstep( 0.24, 0.76, rk1.a );        // 145 px slabs
           rock *= 1.0 - smoothstep( 0.18, 0.02, rk2.a ) * 0.24;           // slab joints
           rock *= mix( 1.0, 0.955 + 0.09 * smoothstep( 0.24, 0.76, rk3.a ), rNear );  // 10 px grain
-          rock *= 1.0 - smoothstep( 0.30, 0.07, rk3.a ) * 0.13 * mix( 0.5, 1.0, rNear );  // joints, 10 px
-          rock *= 1.0 - smoothstep( 0.24, 0.03, rk4.a ) * 0.32 * mix( 0.5, 1.0, rFin );   // hairlines, 3.4 px
+          rock *= 1.0 - smoothstep( 0.30, 0.07, rk3.a ) * 0.11 * mix( 0.5, 1.0, rNear );  // joints, 10 px
+          rock *= 1.0 - smoothstep( 0.24, 0.03, rk4.a ) * 0.20 * mix( 0.5, 1.0, rFin );   // hairlines, 3.4 px
           rock *= mix( 1.0, 0.932 + 0.136 * rk3.a, rNear );               // cavity AO
           // 3.4 px grit, LOD'd by the mip chain and by nothing else. Every band above this one
           // lands in MID; this is the only one that lands in HF, so it is what keeps a distant
@@ -2361,7 +2401,15 @@ export class Terrain {
           // every mip level as a fixed screen pattern. It is both the "visibly tiled rock
           // texture" note and the reason far-field HF sits within 1.4x of the near field.
           // Half the amplitude, and the half that is left rides the footprint gate.
-          rock *= 0.918 + 0.164 * smoothstep( 0.26, 0.74, rk4.a ) * mix( 0.78, 1.55, rFin );
+          rock *= 0.956 + 0.088 * smoothstep( 0.26, 0.74, rk4.a ) * mix( 0.70, 1.55, rFin );
+          // AERIAL PERSPECTIVE, the hue leg. Measured on the last frame: the far massif came
+          // back 20 luma LIGHTER than the near beach (right) and 14 degrees WARMER (backwards).
+          // A haze that MIXES toward a pale constant would fix the hue and flatten the far
+          // massif's contrast with it — far-rock HF sits on its 12.0 floor and cannot pay that.
+          // A MULTIPLIER can: lifting G against the R-B span rotates the hue toward the khaki
+          // of distant rock while every band of relief above survives at full amplitude, and
+          // saturation and value barely move. No blue anywhere near tan rock.
+          rock *= mix( vec3( 1.0 ), vec3( 0.986, 1.064, 1.010 ), 1.0 - rNearD );
 
           // snow: needs altitude, a face that is not sheer, and it favours the lee side.
           // Wind noise strips it off the exposed crest, so it never reads as a white wash.
@@ -2383,17 +2431,57 @@ export class Terrain {
           snowC *= ( 0.94 + 0.11 * rk1.b ) * mix( 1.0, 0.935 + 0.13 * rk4.a, rFin );   // crust, 3.4 px
           // snow replaces the instance tint instead of being multiplied by it, or a dark
           // boulder ends up with grey snow on top
-          rock = mix( vec3( dot( rock, vec3( 0.2126, 0.7152, 0.0722 ) ) ), rock, 1.34 );
+          rock = mix( vec3( dot( rock, vec3( 0.2126, 0.7152, 0.0722 ) ) ), rock, 1.12 );
           diffuseColor.rgb = mix( diffuseColor.rgb * rock * 2.85, snowC, snowAmt );
-          float rspec = ( 0.055 + 0.11 * snowAmt ) * ( 0.45 + 1.1 * rk4.a );  // sparkle, not gloss`)
+
+          // ---- THE LATTICE, ON THE ROCK ITSELF -------------------------------------------
+          // grid.js engraves the GROUND surface and the massif stands on top of it: measured,
+          // half of every mountain rim is occluded by a summit loft, so the board arrives with
+          // no countable grid on a whole biome — standing reject #1 across seven passes. It has
+          // been chased twice from the wrong end (a depth bias, then shrinking the rock until it
+          // fitted inside its hex, which cost the range its mass). The stroke is a pure function
+          // of world XZ, so the rock can simply draw its own half of it: same flat-top lattice
+          // at the same world position, so the two halves are one line where they meet, and it
+          // CONFORMS — it climbs the cliff instead of dropping out above a slope threshold.
+          vec2 hA = vec2( 0.6666667 * vRWP.x, -0.3333333 * vRWP.x + 0.5773503 * vRWP.z );
+          vec3 hC = vec3( hA.x, hA.y, -hA.x - hA.y );
+          vec3 hR = floor( hC + 0.5 ), hE = abs( hR - hC );
+          if ( hE.x > hE.y && hE.x > hE.z ) hR.x = -hR.y - hR.z;
+          else if ( hE.y > hE.z ) hR.y = -hR.x - hR.z;
+          vec2 hL = vec2( vRWP.x - 1.5 * hR.x, vRWP.z - 1.7320508 * ( hR.y + 0.5 * hR.x ) );
+          vec2 hK0 = vec2( 0.8660254, 0.5 ), hK2 = vec2( -0.8660254, 0.5 );
+          float ha0 = abs( dot( hL, hK0 ) ), ha1 = abs( hL.y ), ha2 = abs( dot( hL, hK2 ) );
+          float hd = 0.8660254 - max( ha0, max( ha1, ha2 ) );          // exact, world units
+          // The AA width comes from the ANALYTIC edge normal, not from fwidth(hd): hd has a
+          // crease on the seam and on the hex diagonals, and a derivative taken across either
+          // one reports a huge or a zero footprint — which punches holes in the very line this
+          // is drawn for. |grad hd| is 1 by construction, so the width across the stroke is the
+          // screen derivative of the world position projected onto that normal, and it measures
+          // the same on all six orientations.
+          vec2 hn = ( ha0 >= ha1 && ha0 >= ha2 ) ? hK0 : ( ha1 >= ha2 ? vec2( 0.0, 1.0 ) : hK2 );
+          vec2 hgx = vec2( dFdx( vRWP.x ), dFdx( vRWP.z ) ), hgy = vec2( dFdy( vRWP.x ), dFdy( vRWP.z ) );
+          float hpx = max( length( vec2( dot( hn, hgx ), dot( hn, hgy ) ) ), 1e-5 );
+          // same moire cutoff and the same warm-neutral ink as grid.js's bare seam, so the two
+          // halves of an edge cannot disagree about width, colour or where they stop.
+          float hink = ( 1.0 - smoothstep( 1.00, 2.00, hd / hpx ) ) * ( 1.0 - smoothstep( 0.115, 0.215, hpx ) );
+          diffuseColor.rgb *= mix( vec3( 1.0 ), vec3( 0.400, 0.355, 0.310 ), hink * 0.88 );
+          // ...and the OTHER half of grid.js's contract, or post.js eats this stroke exactly
+          // where it is hardest won. The present pass runs a footprint-graded mip over the far
+          // field — the massif is the most foreshortened surface in the frame, so it gets the
+          // most of it — and spares whatever writes (1 - ink coverage) into the scene target's
+          // alpha. grid.js's ground half does; this half has to as well, or the two disagree
+          // across the very tile rim where rock meets ground.
+          diffuseColor.a = 1.0 - hink * 0.88;
+
+          float rspec = ( 0.055 + 0.11 * snowAmt ) * ( 0.66 + 0.58 * rk4.a );  // sheen, not sparkle`)
         .replace('#include <normal_fragment_maps>', 'normal = normalize( mat3( viewMatrix ) * rN );')
         .replace('#include <specularmap_fragment>', 'float specularStrength = rspec;')
         .replace('#include <lights_fragment_end>', /* glsl */`#include <lights_fragment_end>
           vec3 rdd = reflectedLight.directDiffuse / max( material.diffuseColor, vec3( 1e-4 ) );
           float rlit = clamp( max( rdd.r, max( rdd.g, rdd.b ) ) * 0.80, 0.0, 1.0 );
           reflectedLight.indirectDiffuse += material.diffuseColor
-            * ( vec3( 0.118, 0.116, 0.112 ) * mix( 1.16, 1.0, rlit )
-              + material.diffuseColor * vec3( 1.28, 1.11, 0.86 ) * 1.22 * mix( 1.06, 1.0, rlit ) );`);
+            * ( vec3( 0.152, 0.150, 0.147 ) * mix( 1.16, 1.0, rlit )
+              + material.diffuseColor * vec3( 1.27, 1.10, 0.87 ) * 0.94 * mix( 1.06, 1.0, rlit ) );`);
     };
     return m;
   }
@@ -2477,7 +2565,7 @@ export class Terrain {
       // and a half props and the near field measured barer than the midfield — the exact LOD
       // inversion the whole pass is about. Gravel and bleached litter belong on sand.
       const n = Math.round(58 * (0.18 + 0.92 * veg + 0.34 * dry) * (0.40 + 0.60 * fall)
-                              * (1 - 0.75 * snow) * (1.55 - 1.00 * d / CLUT_R)
+                              * (1 - 0.75 * snow) * (1.90 - 1.55 * d / CLUT_R)
                               * (1 + 0.55 * (this.eco ? this.eco[i] : 0)));
       const br = base[i * 3], bg = base[i * 3 + 1], bb = base[i * 3 + 2];
       // stones come in fields: a macro mask decides whether this patch of ground is stony at
