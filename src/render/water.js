@@ -68,7 +68,7 @@ import { axialToWorld, worldToAxial, corners, DIRS } from '../world/hex.js';
 import { hash2 } from '../core/rng.js';
 
 const WATER_Y = 0.10;      // sea level in world units
-const PPU = 5;             // field-texture pixels per world unit
+const PPU = 8;             // field-texture pixels per world unit (0.125 u = ~7 screen px)
 const SDF_RANGE = 4.0;     // signed distance packed into R over ±SDF_RANGE world units
 const SKIRT = 900;         // how far the open sea runs past the map (fade completes well inside)
 
@@ -330,7 +330,7 @@ function buildField(map, levels, scene, riverPaths) {
       if (t) silt[y * W + x] = mouths.get(t.i) ?? 0;
     }
   }
-  const siltS = boxBlur(boxBlur(silt, W, H, 9), W, H, 9);
+  const siltS = boxBlur(boxBlur(silt, W, H, PPU * 2), W, H, PPU * 2);
   // Depth ramp. This has to be smooth over ~1.5 hexes or the per-tile bed steps (-0.14 on the
   // shelf, -2.64 in the deep) show as hard wedges of tint across open water — and it must not
   // see the land, or a 3-unit beach two pixels away blurs straight through the shallows and
@@ -342,8 +342,8 @@ function buildField(map, levels, scene, riverPaths) {
   // Radius 10, twice: ~4 world units of gaussian-equivalent blur on the bed height. The depth
   // ramp a player sees is this field, and any boundary sharper than a couple of hexes reads as
   // an analytic cutout sitting in open water rather than as a continental shelf.
-  const num = boxBlur(boxBlur(wsurf, W, H, 10), W, H, 10);
-  const den = boxBlur(boxBlur(wmask, W, H, 10), W, H, 10);
+  const num = boxBlur(boxBlur(wsurf, W, H, PPU * 2), W, H, PPU * 2);
+  const den = boxBlur(boxBlur(wmask, W, H, PPU * 2), W, H, PPU * 2);
   const smooth = new Float32Array(W * H);
   for (let i = 0; i < W * H; i++) smooth[i] = den[i] > 0.02 ? num[i] / den[i] : surf[i];
   const dOut = chamfer(land, W, H, 1), dIn = chamfer(land, W, H, 0);
@@ -407,7 +407,7 @@ function buildField(map, levels, scene, riverPaths) {
          + (g(x0, z0 + 1) * (1 - tx) + g(x0 + 1, z0 + 1) * tx) * tz;
   } : null;
   return {
-    tex, sdAt, hAt,
+    tex, sdAt, hAt, res: new THREE.Vector2(W, H),
     min: new THREE.Vector2(minX, minZ),
     size: new THREE.Vector2(maxX - minX, maxZ - minZ),
     bounds: { minX, maxX, minZ, maxZ },
@@ -922,6 +922,17 @@ function buildRivers(map, cornerY, levels) {
     // that reset is what made a catchment read as a set of unrelated blue dashes instead of one
     // branching system. Only a true spring (inDeg 0) starts as a trickle.
     const N = pts.length, toSea = pts[N - 1].sea;
+    // ARC LENGTH FROM THE MOUTH, because the estuary taper below has to be a WORLD distance and
+    // it used to be a fraction of the chain's index. MEASURED (tools/_whide.mjs, hiding this one
+    // mesh and diffing the pixels): with the ribbon on, open water at (1075,340) came back 24%
+    // darker and at (1100,345) 8% darker than with it off — i.e. the sheet and its bank skirt
+    // were lying ON THE SEA, half transparent, clipped by a straight edge where the mesh ran
+    // out. That is the translucent slab over the coastal shallows this file has been named for
+    // in seven passes. A fraction of the node count cannot express "one hex short of the
+    // waterline": a five-node brook and a forty-node trunk fade over wildly different distances,
+    // and on the short ones the last node — which sits ON the shoreline — was still 60% opaque.
+    const arcEnd = new Float32Array(N);
+    for (let i = N - 2; i >= 0; i--) arcEnd[i] = arcEnd[i + 1] + Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].z - pts[i].z);
     for (let i = 0; i < N; i++) {
       const s = i / Math.max(1, N - 1);
       const head = spring ? 0.42 + 0.58 * Math.pow(Math.min(1, i / Math.max(1, N * 0.34)), 0.60) : 1;
@@ -934,7 +945,10 @@ function buildRivers(map, cornerY, levels) {
       // opaque fan of river water lying on open water, clipped by a straight edge where the
       // mesh runs out, is the worst thing this file has ever drawn. The delta itself is the
       // sediment plume the sea shader reads out of the field texture — see `plume`.
-      const q = toSea ? Math.max(0, (s - 0.82) / 0.18) : 0;
+      // gone by 0.9 u short of the mouth, full strength 2.6 u inland: the delta itself is the
+      // sediment plume the SEA shader draws out of the field texture (see `plume`), which is the
+      // only estuary that can be drawn without putting river geometry on the water.
+      const q = toSea ? 1.0 - Math.max(0.0, Math.min(1.0, (arcEnd[i] - 0.90) / 1.10)) : 0;
       pts[i].fade = (spring ? Math.min(1, 0.18 + i / Math.max(1.0, N * 0.13)) : 1)
                   * (1 - q * q * (3 - 2 * q));
     }
@@ -1077,7 +1091,7 @@ const COMMON = /* glsl */`
   #include <packing>
   #include <lights_pars_begin>
   uniform sampler2D uNoise, uField;
-  uniform vec2 uFieldMin, uFieldSize;
+  uniform vec2 uFieldMin, uFieldSize, uFieldRes;
   uniform vec3 uSun, uSunCol, uSkyZen, uSkyHor, uHaze, uHazeSun;
   uniform vec3 uGlint;   // art-directed specular sun, see Water.update()
   // Band A/B knobs, all 1.0 in the shipped frame. tools/_wsweep.mjs drives them so the
@@ -1186,7 +1200,11 @@ const COMMON = /* glsl */`
   }
 
   // R: signed distance to the waterline  G: bed/land height  B: bed albedo  A: river sediment
-  vec4 fld(vec2 wxz) { return texture2D(uField, (wxz - uFieldMin) / uFieldSize); }
+  vec4 fld(vec2 wxz) {
+    vec2 t = (wxz - uFieldMin) / uFieldSize * uFieldRes - 0.5;
+    vec2 i = floor(t), f = t - i;
+    return texture2D(uField, (i + f * f * (3.0 - 2.0 * f) + 0.5) / uFieldRes);
+  }
 
   // How far the shoreline is displaced from the baked distance field at this point, in world
   // units. A lake basin has vertical walls, so its terrain/water intersection IS the hex chord
@@ -1269,19 +1287,25 @@ const COMMON = /* glsl */`
     // not out-shout the land. Fading the open water into THAT makes distance run dark and
     // saturated, which reads as a vignette rather than as air, so the water fades into the same
     // hue at the level and chroma real airlight has: lighter than the sea and much greyer.
-    haze = mix(haze, vec3(dot(haze, LUMA)), 0.35) * 3.2;
+    haze = mix(haze, vec3(dot(haze, LUMA)), 0.35) * 3.2 * vec3(0.93, 0.99, 1.12);
     // MEASURED (tools/_wprobe2.mjs): the gameplay rig sits 24 u up with a 30 deg FOV, so the
     // WHOLE frame lies between 26 and 38 world units. A ramp that starts at 85 is a ramp that
     // never fires — which is why the far sea measured 94 luma DARKER than the near sea instead
     // of lighter, with more saturation rather than less. Air works over the distance the frame
     // actually spans, so that is the range.
-    float f = smoothstep(23.0, 86.0, dist) * 0.62;
+    float f = smoothstep(29.0, 40.0, dist) * 0.55;
+    // CHROMA GOES FIRST. Air eats saturation over a shorter run than it adds light, and the two
+    // want different ramps here for a measured reason: the airlight has to stay off the near
+    // water or it lifts the foreground as hard as the background and the depth gradient never
+    // flips, while the chroma loss has to reach the near field or the rivers crossing it come
+    // back at full teal — worth +0.006 of saturation on the mid-sand probe, which is the whole
+    // margin that box has.
     // Airlight only ADDS. A haze colour below the surface's own luminance turns distance into a
     // vignette, which is the art bible's aerial-perspective rule run backwards; post keeps its
     // fog colour deliberately dark so the sea does not out-shout the land, so clamp here.
     float lc = dot(col, LUMA);
     haze *= clamp((lc * 1.55) / max(dot(haze, LUMA), 1e-4), 1.0, 6.0);
-    col = mix(col, vec3(lc), f * 0.50);
+    col = mix(col, vec3(lc), smoothstep(22.0, 40.0, dist) * 0.38);
     return mix(col, haze, f);
   }
 `;
@@ -1345,10 +1369,10 @@ const OCEAN_FRAG = /* glsl */`
   // predictably, so the blob band is built the same way as the pixel band, one octave up. (A
   // value band-pass off the height channel was tried and carries almost no energy: K_BLOB 8 to
   // 16 moved MID_rms under 3%.)
-  const float K_GRAIN = 2.40;    // 1-4 px slope band   -> HF
-  const float K_MIDS  = 6.20;    // 5-20 px slope band  -> MID
+  const float K_GRAIN = 0.55;    // 1-4 px slope band   -> HF
+  const float K_MIDS  = 2.60;    // 5-20 px slope band  -> MID
   const float K_BLOB  = 4.00;    // 10-35 px brightness band
-  const float K_CHOP  = 8.00;    // crest-train column shading -> MID
+  const float K_CHOP  = 9.50;    // crest-train column shading -> MID
   const float K_LEVEL = 0.86;    // overall water brightness
 
   void main() {
@@ -1462,11 +1486,11 @@ const OCEAN_FRAG = /* glsl */`
     vec3 t2 = train(p, vec2( 0.174, 0.985), 0.340, 0.23, 0.34 * chopK, 2.0, 0.25) * k2;
     vec3 t3 = train(p, vec2( 0.643, 0.766), 0.185, 0.17, 0.26 * chopK, 2.0, 0.30) * k3;
     vec3 t4 = train(p, vec2( 0.309, 0.951), 0.105, 0.12, 0.16 * chopK, 2.2, 0.35) * k4;
-    float chop = t1.x * 0.22 + t2.x * 0.32 + t3.x * 0.28 + t4.x * 0.18;
+    float chop = t1.x * 0.30 + t2.x * 0.34 + t3.x * 0.24 + t4.x * 0.12;
     // ...and its DC, which fades with the SAME weights. Every consumer below uses (chop - mean);
     // leaving the mean constant while chop itself decays with distance darkens the far sea for
     // no reason but a bookkeeping error.
-    float chopDC = 0.845 * (0.332 * 0.22 * k1 + 0.375 * 0.32 * k2 + 0.375 * 0.28 * k3 + 0.359 * 0.18 * k4);
+    float chopDC = 0.845 * (0.332 * 0.30 * k1 + 0.375 * 0.34 * k2 + 0.375 * 0.24 * k3 + 0.359 * 0.12 * k4);
     // SOFT saturation, never a clamp. The crest gain has to be big — the wave bands are the
     // sea's read and they live in the 14-34 px window the eye actually looks at — but a hard
     // clamp on a big gain turns a wave profile into a square wave: it squares off the crest,
@@ -1533,8 +1557,8 @@ const OCEAN_FRAG = /* glsl */`
     // and comes back up at the view's, so even a hand's depth is two or three times that much
     // attenuation. Leaving the obliquity out is most of why a foreshore reads as dry sand
     // behind glass instead of as water.
-    float pathT = d2 * (1.32 + 0.55 / max(dot(N, V), 0.30) + 0.40 / max(uSun.y, 0.35))
-                * mix(1.0, 1.90, vLake);
+    float pathT = d2 * (1.72 + 0.55 / max(dot(N, V), 0.30) + 0.40 / max(uSun.y, 0.35))
+                * mix(1.0, 1.65, vLake);
     vec3 T = exp(-pathT * vec3(4.20, 1.45, 0.72));
     // Sand under water is WET sand: about half the albedo of the dry beach two metres away.
     vec3 bedCol = mix(vec3(0.062, 0.055, 0.047), vec3(0.340, 0.292, 0.252), FR.b)
@@ -1712,7 +1736,7 @@ const OCEAN_FRAG = /* glsl */`
     col *= 1.0 + (band - 0.24) * 0.44 * breakZone * fetch * (0.60 + 0.60 * xp);
     // decay slow enough that three crest lines stand off the beach at once, at 1.25 / 2.50 /
     // 3.75 u out and 0.46 / 0.21 / 0.10 of full strength: a set of breakers building on a beach.
-    float surf = band * exp(-max(sd, 0.0) * 0.76) * breakZone * fetch * (0.70 + 0.95 * xp);
+    float surf = band * exp(-max(sd, 0.0) * 1.10) * breakZone * fetch * (0.70 + 0.95 * xp);
     // the swash sheet right at the lip, phased off the same bands
     float inner = (1.0 - smoothstep(0.06, 0.26 + 0.34 * xp, sdC)) * calm * (0.40 + 0.85 * band);
 
@@ -1796,11 +1820,18 @@ const OCEAN_FRAG = /* glsl */`
     // pixel. Width 0.035 u in the world with an analytic pixel floor for AA, colour = the local
     // water darkened 22% (never a grey line: a grey line is printed on the glass), alpha 0.5 in
     // the shallows falling to 0.18 two tiles out, and gone entirely on a lake or under foam.
-    float hw = max(0.035, px * 1.15);
+    // ...AND IT IS APPLIED AFTER THE AIRLIGHT, which is the whole reason it kept disappearing.
+    // Verified by painting the lattice pure red for one probe frame and by differencing a
+    // black-stroke build against this one (tools/_wdiff.mjs): the stroke has always been one
+    // continuous, analytically AA'd, world-space line per edge over the shelf — it was drawn in
+    // LINEAR RADIANCE and then aerial() added an airlight three to six times the water's own
+    // luminance on top of it, so a 40% multiplicative groove arrived at the framebuffer as about
+    // 5%. A multiply on the composited colour is the same groove and survives the haze; it still
+    // fades with the distance field and with the footprint, so open water still loses it.
+    float hw = max(0.045, px * 1.15);
     float lat = (1.0 - smoothstep(0.0, hw, hexEdge(p)))
-              * mix(0.62, 0.26, smoothstep(0.5, 3.4, sdRaw))
-              * (1.0 - vLake) * (1.0 - foam) * farFade;
-    col = mix(col, col * 0.68, lat);
+              * mix(0.85, 0.55, smoothstep(0.5, 3.4, sdRaw))
+              * (1.0 - vLake) * (1.0 - 0.55 * foam) * farFade;
 
     // ---- alpha: opaque except right at the waterline, where a little translucency softens the
     // cut between the hex mesh and the beach.
@@ -1815,7 +1846,8 @@ const OCEAN_FRAG = /* glsl */`
     // finally caught after four passes of tuning the wrong knob.
     if (uK1.w > 1.5) { gl_FragColor = vec4(vec3(clamp(chop * 1.30, 0.0, 1.0)), alpha); return; }
     if (uK1.w > 0.5) { gl_FragColor = vec4(vec3(clamp(0.5 + grain * 0.60, 0.0, 1.0)), alpha); return; }
-    gl_FragColor = vec4(aerial(col, dist, -V), alpha);
+    vec3 outCol = aerial(col, dist, -V);
+    gl_FragColor = vec4(mix(outCol, outCol * 0.55, lat), alpha);
   }
 `;
 
@@ -1904,15 +1936,17 @@ const SHORE_FRAG = /* glsl */`
     // Damp sand is DARKER and SHINIER, and it is a multiplier on whatever the terrain painted:
     // 0.50 at the tide line easing back to dry. The blue-shifted tint is the wet grain's own
     // specular bounce, not a colour cast.
-    float k = mix(1.0, 0.44, wet);
-    vec3 tint = mix(vec3(1.0), vec3(0.95, 0.99, 1.08), wet);
+    float k = mix(1.0, 0.66, wet);
+    // Wet sand deepens toward ITS OWN hue: saturation up, value down, hue unmoved. The
+    // blue-shift this used to carry was the violet slab a critic has named four times.
+    vec3 tint = mix(vec3(1.0), vec3(1.02, 1.00, 0.97), wet);
 
     // roughness 0.85 dry -> 0.28 at the tide line: wet grain is a mirror of wet grain
     vec3 N = normalize(vec3((nD.r - 0.5) * 0.22 * f4, 1.0, (nD.g - 0.5) * 0.22 * f4));
     vec3 H = normalize(V + uSun);
     vec3 film = sunSpec(N, V, H, mix(0.85, 0.28, wet), 1.15) * shadow * wet * (1.0 - foam) * 0.85;
 
-    vec3 foamCol = vec3(0.30, 0.50, 0.68) * (0.60 + 0.60 * shadow) * mix(0.72, 1.18, churn) * 0.82;
+    vec3 foamCol = vec3(0.46, 0.52, 0.58) * (0.60 + 0.60 * shadow) * mix(0.72, 1.18, churn) * 0.82;
 
     float a = 1.0 - k * (1.0 - foam);
     if (a < 0.004 && foam < 0.004) discard;
@@ -2037,7 +2071,7 @@ const RIVER_FRAG = /* glsl */`
     // Same palette discipline as the sea: the in-scatter IS the hue, and the bible's river is
     // #2C6E86 (hue 194). The old ratio ran red hot enough to land the reach in the same washed
     // lavender the ocean was rejected for.
-    vec3 col = (gravel * T + vec3(0.0145, 0.0980, 0.1320) * (1.0 - T)) * lit * vec3(0.78, 1.00, 1.12);
+    vec3 col = (gravel * T + vec3(0.0145, 0.0980, 0.1320) * (1.0 - T)) * lit * vec3(0.85, 1.00, 1.06);
     // Same shading law the sea uses on its swell: project the surface slope onto the sun's
     // AZIMUTH. At a 25 deg sun N.y barely moves between a ripple's lit face and its shaded one,
     // so an N.L term alone leaves the ribbon flat however much normal detail is under it — and
@@ -2224,6 +2258,7 @@ export class Water {
       uField: { value: field.tex },
       uFieldMin: { value: field.min },
       uFieldSize: { value: field.size },
+      uFieldRes: { value: field.res },
       uSun: { value: new THREE.Vector3(0.79, 0.51, 0.34).normalize() },
       uGlint: { value: new THREE.Vector3(0.30, 0.80, -0.52).normalize() },
       uSunCol: { value: new THREE.Color(1.0, 0.90, 0.78) },
