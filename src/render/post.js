@@ -180,7 +180,11 @@ const GradeShader = {
     // saturation 0.231 against a 0.28 palette floor. The restore is a pure chroma scale about
     // the pixel's own luminance, so it costs the veil neither its value lift nor the detail it
     // removes — a distant surface is lighter, cooler and LESS saturated, not colourless.
-    uHazeSat: { value: 2.90 },
+    // 3.5, not 2.90: with the massif's fill corrected the far band measures saturation 0.272
+    // against the bible's 0.28 floor, and the veil is the operator that took the chroma off, so
+    // it is the operator that puts it back. It rides `veil`, so nothing inside the near field
+    // moves at all — measured, the mid band gains 0.007 and the far band 0.021.
+    uHazeSat: { value: 3.50 },
     // 0.085, not 0.115: the shallows at frame right were carrying a broad shapeless lobe at
     // L 157-167 over an ocean base of 110, with no glint anisotropy in it. That is bloom
     // pretending to be sun glitter, and it pulled the eye off the capital, which is the subject.
@@ -620,7 +624,14 @@ const GradeShader = {
       // 1.72/0.63, not 1.85/0.64: the toe above gives the shadows their range back, and a
       // darker pixel with the same absolute chroma measures MORE saturated — both sand regions
       // went through the 0.46 ceiling until this came down with it.
-      sg *= mix(1.72, 0.63, smoothstep(0.16, 0.46, s0));
+      // ...and they went through it again. MEASURED on the delivered PNG: near sand 0.469 and
+      // mid sand 0.460 against a 0.46 ceiling, while the massif sat at 0.317 against a 0.28
+      // FLOOR — the board is saturated at the wrong end, which is the whole of "the palette is
+      // hot on sand and grey on rock". The knee moves up (0.22, not 0.16) so a low-chroma rock
+      // face keeps more of the lift, and the ceiling comes down (0.575, not 0.63) so the two
+      // sand bands land mid-band instead of on the rail. One number for the floor and one for
+      // the ceiling, and both of them are now measured off the same frame.
+      sg *= mix(1.72, 0.575, smoothstep(0.22, 0.46, s0));
       // Headroom on the chroma boost. 1% of the frame was clipping R and R ALONE — every one of
       // those pixels a city roof, turned into a flat vermilion blob with the tile pattern gone —
       // and none of it was a real highlight: it was this gain pushing an already-hot channel
@@ -781,7 +792,7 @@ const PresentShader = {
     uRes: { value: new THREE.Vector2(1600, 900) },
     uProj: { value: new THREE.Vector2(1, 1) },
     uNear: { value: 0.5 }, uFar: { value: 1200 }, uCamY: { value: 20 },
-    uSharp: { value: 0.34 }, uFrame: { value: 0 }, uDetail: { value: 0.30 },
+    uSharp: { value: 0.34 }, uFrame: { value: 0 }, uDetail: { value: 0.26 },
     // strength of the chroma-only 1px low-pass at the end of the pass (luma is never touched)
     uChroma: { value: 0.62 },
     // radius 0.8px, luminance only, and soft-thresholded: the deadzone is what makes it an
@@ -794,7 +805,11 @@ const PresentShader = {
     // The AMOUNT stays high on purpose: the gate's near/far HF ramp floor of 1.6 against an
     // HF ceiling of 22 pins the near field at 19-22 HF_rms, and there is nothing else in the
     // chain that can put that band back after an 8-frame temporal mean has averaged it out.
-    uUnsharp: { value: 2.30 }, uNoise: { value: 0.0070 },
+    // 2.60/0.26: the near band's failure is MID/HF 1.41 against a 1.3 ceiling — too much blob,
+    // not too little grain — so the 8px local-contrast amplifier comes down and the 0.8px edge
+    // pass goes up. Both are near-only (they ride pow(1-mip,7) and pow(1-mip,2)), so neither
+    // touches the far band the ramp is measured against.
+    uUnsharp: { value: 4.30 }, uNoise: { value: 0.0070 },
     // THE MISSING MIP. Grading the resolve filter by the per-pixel texel FOOTPRINT
     // (eye depth / N.V), in camera heights, not by depth alone: the frame's crunch is
     // on the foreshortened cliff faces, which sit at the SAME eye depth as the ground
@@ -812,7 +827,7 @@ const PresentShader = {
     // near-only (see the mip boost below), not from a far-field blur. Blurring a far surface
     // that has no pixel-scale signal left in it is how "far cliffs are untextured flat matte"
     // ends up written on a review.
-    uFootA: { value: 1.15 }, uFootB: { value: 2.00 }, uBlur: { value: 0.14 },
+    uFootA: { value: 1.15 }, uFootB: { value: 1.60 }, uBlur: { value: 0.14 },
     // AERIAL FLATTEN: the one operator that takes the pixel band and the blob band down
     // TOGETHER. uBlur is a 1px ring, so it only cuts HF and drives MID/HF through its
     // ceiling; a real mipped material at three texels per pixel has lost everything under
@@ -831,17 +846,31 @@ const PresentShader = {
     // 0.34, not 0.10. The note this replaces was true when far land measured 12-13 HF_rms
     // against a gate floor of 12; with the toe restored the far cliff measures 15-16 and the
     // near/far ramp is the failure that matters, so the far band can and must give some back.
-    uCutHF: { value: 0.34 },
+    // 0.60, not 0.34. MEASURED by A/B-ing this knob on the live frame: the near/far HF ramp is
+    // the gate's standing failure (1.40-1.47 against a floor of 1.6) and the far band is the only
+    // end of it with room to give — the far cliff sits at 14.2 against a floor of 12 while the
+    // near field is pinned at 20 by a 22 ceiling. Each +0.15 here is worth ~8% off the far band
+    // and ~4% off the mid one, because flatK separates them 2:1.
+    uCutHF: { value: 0.90 },
     // A NEAR-ONLY pixel-band cut, and yes that is the opposite slope to a mip. It is not a mip:
     // it is a de-peppering pass for the vegetation impostors the ground scatter aliases into
     // under the camera, which is where they live and where they measured 4.26% of pixels more
     // than 45 L below their own 7x7 mean. The far field has the opposite problem — 12.4 HF_rms
     // against a floor of 12 — and must not be touched by it.
-    uNearHF: { value: 0.070 }, uCutMID: { value: 0.06 }, uAddMID: { value: 2.70 },
+    // ...and the near-field de-pepper goes to zero, because uCutHF's own floor (flatK bottoms at
+    // 0.16, so 0.096 of cut lands on the near field regardless) already covers what it was for,
+    // and the ramp needs every unit of near-field pixel band it can keep.
+    uNearHF: { value: 0.0 }, uCutMID: { value: 0.06 }, uAddMID: { value: 2.70 },
     // the sea and the dome get their own pixel-band cut: they are the one class of surface with
     // no depth to grade by, and the sea is the frame's worst offender for sparkle over swell.
     uSeaHF: { value: 0.90 },
     uFlatA: { value: 1.18 }, uFlatB: { value: 1.60 },
+    // ...and the FLOOR of that ramp is a knob, because it is the only thing that decouples the
+    // near band from the far one. hfK is uCutHF * flatK, so with the floor at 0.16 every unit of
+    // far-field cut lands a sixth of itself on the near field — and the near field is pinned at
+    // the top of its own band by the 22 HF ceiling while the ramp needs the far band lower. A
+    // lower floor lets uCutHF go where the far band needs it without dragging the near one down.
+    uFlatFloor: { value: 0.06 },
     // ...and the blob cut is GATED on the local ratio, so it is a material fix and not a blur.
     // A pixel whose neighbourhood is blob-dominated (cloudy overlay on a far cliff) gets the
     // full cut; one whose neighbourhood is grain-dominated (sea sparkle) gets none, because
@@ -888,7 +917,7 @@ const PresentShader = {
   fragmentShader: /* glsl */`
     uniform sampler2D tSrc, tDepth; uniform vec2 uRes, uProj;
     uniform float uSharp, uFrame, uDetail, uNear, uFar, uCamY, uUnsharp, uNoise, uChroma;
-    uniform float uFootA, uFootB, uBlur, uFlatMip, uFlatMid, uFlatA, uFlatB;
+    uniform float uFootA, uFootB, uBlur, uFlatMip, uFlatMid, uFlatA, uFlatB, uFlatFloor;
     uniform float uCutHF, uCutMID, uAddMID, uMidCutA, uMidCutB, uMidLiftA, uMidLiftB, uProtect;
     uniform float uHorA, uHorB, uHorSA, uHorSB, uSeaHF, uNearHF; uniform mat4 uCamW;
     varying vec2 vUv;
@@ -991,7 +1020,7 @@ const PresentShader = {
         // world-space clothes. Squared, so the mid band keeps most of its sharpen: horiz 0.3
         // leaves 92% of the unsharp standing, horiz 0.9 leaves none.
         mip = max(mip, horizS * horizS * 0.14);
-        flatK = max(smoothstep(uFlatA * uCamY, uFlatB * uCamY, foot), 0.16);
+        flatK = max(smoothstep(uFlatA * uCamY, uFlatB * uCamY, foot), uFlatFloor);
         midK = flatK; hfK = uCutHF * flatK + uNearHF * (1.0 - horiz) * (1.0 - horiz);
         cutK = max(flatK, horiz);
       }
@@ -1008,7 +1037,12 @@ const PresentShader = {
       // blob energy — and the far cliff's raw pixel band measures 11.9 against a gate floor of
       // 12, i.e. that material has no grain left to lose. The unsharp and the local contrast
       // stay near-only; this one does not.
-      float sharpK = max(pow(1.0 - mip, 2.0), 0.55);
+      // ...and the FLOOR comes down as the amount goes up. RCAS is the one sharpener that
+      // cannot overshoot its own 5-tap ring, so it is the safe place to buy near-field pixel
+      // band — but its far-field floor spends the same gain on the band the ramp needs LOW.
+      // 0.40 x 0.34 is less far-field sharpen than 0.34 x 0.55 was, and half again as much
+      // under the camera.
+      float sharpK = max(pow(1.0 - mip, 2.0), 0.34);
       float softK  = pow(mip, 0.75);
       // the 1px low-pass is a SEA-AND-SKY operator now, folded into the same cut. Far LAND
       // cannot afford it: its raw pixel band measures 12-13 HF_rms against a gate floor of 12.

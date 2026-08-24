@@ -1519,7 +1519,7 @@ export class Terrain {
           // "blurry blobs, no material" on the far massif. Cavity AO keeps the 10 px band at
           // a third of its old depth, because that one is shape rather than grain.
           float frac = smoothstep( 0.22, 0.02, sharp( nFin.a, 3.0 ) );                // joints, 3.4 px
-          rCol *= 1.0 - frac * ( 0.38 + 0.30 * wall ) * mix( 0.55, 1.0, dClose );
+          rCol *= 1.0 - frac * ( 0.38 + 0.30 * wall ) * mix( 0.40, 1.0, dClose );
           float cav = smoothstep( 0.58, 0.18, 0.55 * nMes.a + 0.45 * sharp( nMic.a, 1.6 ) );
           rCol *= 1.0 - cav * 0.13 * ( 0.45 + 0.55 * detail );
           rCol *= 0.968 + 0.062 * smoothstep( 0.22, 0.80, nMes.a );                   // block scatter, 20 px
@@ -1533,7 +1533,16 @@ export class Terrain {
           // A 3 px feature contributes ~1.0 to HF_rms and ~0.12 to MID_rms, so this is the one
           // band that keeps a far massif from mipping down to a painted plate without adding
           // any of the blur the metric reads as structureless.
-          rCol *= 1.0 + ( gFin - 0.5 ) * 0.86 * mix( 0.55, 1.0, dClose )
+          // ...and BOTH 3.4 px bands shrink with the footprint, which is the whole near/far
+          // detail ramp. MEASURED: with them held at 0.55 of amplitude at the back of the frame
+          // the far massif runs 15.3 HF_rms against a near field pinned at 20 by its own 22
+          // ceiling — a ramp of 1.33 where the gate wants 1.6 — and post cannot close it: eleven
+          // A/B'd settings of the present pass's pixel-band cut, up to a 0.90 mix toward the
+          // 4-tap ring, moved the far band by 5%, because mixing toward a ring average
+          // asymptotes. Detail has to shrink with the material's own footprint, and only the
+          // material knows it. dClose is that footprint (1.75 u tile over a 32-cycle atlas),
+          // so this is a real mip-chain LOD and not a distance blur.
+          rCol *= 1.0 + ( gFin - 0.5 ) * 0.86 * mix( 0.38, 1.0, dClose )
                       + ( smoothstep( 0.16, 0.84, nMic.a ) - 0.5 ) * 0.06 * dNear;
           rCol = mix( rCol, rCol * vec3( 0.86, 1.06, 0.79 ), nMac.b * 0.30 * ( 1.0 - wall ) );   // lichen
           // talus: a gravel wash over the bottom third only, so it grounds the cut without
@@ -1637,7 +1646,15 @@ export class Terrain {
           // term, so lifting the shadow does not rotate its hue toward blue.
           reflectedLight.indirectDiffuse += material.diffuseColor
             * ( skyC * ( 0.60 + 0.14 * wall - 0.12 * wRock ) * mix( 0.58 - 0.06 * wRock, 1.0, lit )
-              + bounce * ( 1.04 + 0.30 * wRock ) * mix( 0.44 + 0.30 * wRock, 1.0, lit ) );`);
+              + bounce * ( 1.04 + 0.95 * wRock ) * mix( 0.44 + 0.46 * wRock, 1.0, lit ) );`);
+        // ROCK'S FILL IS BOUNCE, NOT SKY. MEASURED on the delivered PNG: the massif came back at
+        // mean 101 and saturation 0.244 against a near field at 107 and a 0.28 palette floor —
+        // i.e. the one band that is furthest away was the DARKEST and the GREYEST thing on the
+        // board, which is the aerial-perspective rule run backwards on both of its axes at once.
+        // The whole lift is on `bounce`, which is the surface's own albedo: it is second-hand
+        // sunlight off warm rock, so it raises value and chroma TOGETHER and cannot rotate the
+        // shadow hue off the lit hue. Putting the same lift on skyC would have bought the value
+        // back and paid for it in exactly the navy the bible bans.
     };
     return m;
   }
@@ -1735,11 +1752,19 @@ export class Terrain {
         }
       }
 
-      // ---- summits: broad ridge masses, laid ALONG THE CONTOUR of the massif (perpendicular
-      //      to the local height gradient), so neighbouring summits chain into buttresses and a
-      //      crest line instead of a bed of nails. Only some tiles carry one; the rest are the
-      //      massif body, and letting the surface show through is what gives the range scale.
-      if (HIGH(t) && (!this._notTop(i) || hash2(t.q, t.r, 4441) < 0.52)) {
+      // ---- summits: one loft per HIGH tile, and IT HAS TO FIT INSIDE ITS OWN HEX.
+      //      MEASURED, by debug-rendering the grid decal's own coverage mask on this frame: the
+      //      lattice is drawn on the massif at full strength and full fade, and then depth-tested
+      //      away, because a loft of radius 1.56-2.40 stretched up to 1.58x is a rock mass two to
+      //      four hexes across sitting on every other summit. A hex is 1.0 corner-radius; the
+      //      lattice lives on its RIM; so those shells erased the grid over the whole range —
+      //      standing reject #1, and no amount of stroke strength or depth bias can answer it
+      //      (a 4-unit view-space bias was tried on the live frame and moved nothing). The same
+      //      overlap is the faceted, self-intersecting shell read on the skyline. One loft per
+      //      tile, footprint inside the hex flat radius (0.866): the tile INTERIOR still carries
+      //      rock — the tiles that used to be bare now carry their own, so the range stays
+      //      continuous — and every hex gets a countable rim back.
+      if (HIGH(t)) {
         let gx = 0, gz = 0, nbSum = 0, nbN = 0;
         for (let d = 0; d < 6; d++) {
           const o = map.get(t.q + DIRS[d].q, t.r + DIRS[d].r);
@@ -1756,26 +1781,46 @@ export class Terrain {
         const alt = clamp01((this.surfY[i] - this.maxH * 0.42) / (this.maxH * 0.5));
         // 40m swell over the massif, so the skyline has shoulders and summits, not one plateau
         const swell = 0.55 + 1.05 * fbm2(p.x * 0.055, p.z * 0.055, { octaves: 2, seed: 4241 });
-        const rad = 1.56 + 0.84 * h1;
-        // h2^3 makes the tall summits rare: most tiles are shoulders, a few are the hero peaks
-        const hgt = (1.18 + 3.05 * h2 * h2 * h2) * (0.50 + 0.95 * alt) * (0.55 + 0.80 * prom) * swell;
-        const stretch = 0.72 + 0.86 * h3 * h3;   // some summits pull out into a wall
+        // Sized off the loft's VISIBLE footprint, not its base ring: the skirt is buried 0.45
+        // under the tile, so rock only breaks ground inside about 0.6 of the instance scale.
+        // 1.18-1.40 lands that at 0.71-0.84 — inside the 0.866 hex flat radius, so the rim the
+        // lattice is engraved on stays clear, and the tile INTERIOR is still rock rather than a
+        // ring of bare shaded ground (which measured the massif 20 luma DARKER than the near
+        // field, i.e. aerial perspective running backwards, when the loft was cut to 1.04).
+        const rad = 1.18 + 0.22 * h1;
+        // h2^3 makes the tall summits rare: most tiles are shoulders, a few are the hero peaks.
+        // The mass the wide shells carried comes back as HEIGHT — a narrower loft at the old
+        // height is a spike, one that keeps neither is a hex bench with gravel on it.
+        const hgt = (1.42 + 3.55 * h2 * h2 * h2) * (0.56 + 0.90 * alt) * (0.58 + 0.78 * prom) * swell;
+        const stretch = 0.90 + 0.22 * h3 * h3;   // some summits pull out into a wall
         // slightly elongated along the contour, so a slope grows buttresses instead of pimples.
         // yaw is negated: a +Y rotation carries local +X to (cos, 0, -sin)
-        ridges.push(p.x + (h1 - 0.5) * 0.55, this.centreY[i] - 0.45 - 0.10 * hgt, p.z + (h3 - 0.5) * 0.55,
+        const ox = (h1 - 0.5) * 0.17, oz = (h3 - 0.5) * 0.17;   // stays clear of its own rim
+        ridges.push(p.x + ox, this.centreY[i] - 0.45 - 0.10 * hgt, p.z + oz,
           rad * stretch, hgt, rad / Math.sqrt(stretch) * 0.86,
           -theta + (h3 - 0.5) * 0.7, (h1 - 0.5) * 0.10, h2, i);
         this.cullR[i] = Math.max(this.cullR[i], 3.2 + hgt + rad * stretch);
-        this._stamp(p.x + (h1 - 0.5) * 0.55, p.z + (h3 - 0.5) * 0.55, rad * 0.95, 0.46, 0, 1.5);
+        this._stamp(p.x + ox, p.z + oz, rad * 1.40, 0.28, 0, 1.1);
       }
 
       // ---- boulders on hills and bare high ground
-      const rocky = HIGH(t) ? 2.4 : (t.biome === 'hills' ? 0.4 : (t.biome === 'desert' ? 0.45 : (this.surfY[i] > hi ? 0.25 : 0.04)));
+      // 1.4 on the massif, not 2.4. MEASURED: the far band's HF_rms did not move when BOTH of
+      // the rock shaders' 3.4 px albedo bands were cut to a third at the back of the frame — so
+      // the far massif's pixel-scale energy is not texture at all, it is the SILHOUETTE of ~2.5
+      // boulders per mountain hex, each a few pixels across, and no material LOD can filter a
+      // geometric edge. Thinning them is the only thing that shrinks that band with distance,
+      // and it is the same edit that gives the lattice its rim back.
+      const rocky = HIGH(t) ? 1.4 : (t.biome === 'hills' ? 0.4 : (t.biome === 'desert' ? 0.45 : (this.surfY[i] > hi ? 0.25 : 0.04)));
       const nr = Math.floor(rocky) + (hash2(t.q, t.r, 77) < (rocky % 1) ? 1 : 0);
       for (let k = 0; k < nr; k++) {
         const h1 = hash2(t.q * 23 + k, t.r * 29, 1201), h2 = hash2(t.q * 23 + k, t.r * 29, 1303);
         const h3 = hash2(t.q * 23 + k, t.r * 29, 1409), h4 = hash2(t.q * 23 + k, t.r * 29, 1511);
-        const a = h1 * Math.PI * 2, rr = 0.42 + 0.46 * h2;
+        // ...and on the massif they come INBOARD. The boulder ring used to run 0.42-0.88 of the
+        // corner radius, i.e. straight through the tile rim the lattice is engraved on, which is
+        // the second half of the missing grid on rock. Elsewhere the old ring is fine — a hill or
+        // a desert tile has three boulders on it, not thirty.
+        const HR = HIGH(t) ? 0.20 : 0.42, RR = HIGH(t) ? 0.40 : 0.46;
+        const a = h1 * Math.PI * 2, rr = HR + RR * h2;
         const lx = Math.cos(a) * rr, lz = Math.sin(a) * rr;
         const y = this._localY(i, lx, lz);
         if (y < 0.05 || !clearOf(i, lx, lz, 0.20)) continue;
@@ -1849,17 +1894,6 @@ export class Terrain {
     if (this.ridgeMesh) this.group.add(this.ridgeMesh);
     if (this.rockMesh) this.group.add(this.rockMesh);
     this.rockMat = rockMat;
-  }
-
-  // True when some HIGH neighbour clearly overtops this tile: only the local maxima of the
-  // massif carry a summit loft, so the range reads as a crest line instead of a bed of nails.
-  _notTop(i) {
-    const t = this.map.tiles[i];
-    for (const d of DIRS) {
-      const o = this.map.get(t.q + d.q, t.r + d.r);
-      if (o && this.surfY[o.i] > this.surfY[i] + 0.50) return true;
-    }
-    return false;
   }
 
   // -------------------------------------------------------------- tile information
@@ -2302,12 +2336,19 @@ export class Terrain {
           rock *= 1.0 - smoothstep( 0.18, 0.02, rk2.a ) * 0.24;           // slab joints
           rock *= mix( 1.0, 0.955 + 0.09 * smoothstep( 0.24, 0.76, rk3.a ), rNear );  // 10 px grain
           rock *= 1.0 - smoothstep( 0.30, 0.07, rk3.a ) * 0.13 * mix( 0.5, 1.0, rNear );  // joints, 10 px
-          rock *= 1.0 - smoothstep( 0.24, 0.03, rk4.a ) * 0.42 * mix( 0.5, 1.0, rFin );   // hairlines, 3.4 px
+          rock *= 1.0 - smoothstep( 0.24, 0.03, rk4.a ) * 0.42 * mix( 0.25, 1.0, rFin );  // hairlines, 3.4 px
           rock *= mix( 1.0, 0.932 + 0.136 * rk3.a, rNear );               // cavity AO
-          // 3.4 px grit, LOD'd by the mip chain and by nothing else. Every band above this one
-          // lands in MID; this is the only one that lands in HF, so it is what keeps a distant
-          // flank from mipping down to a painted plate.
-          rock *= 0.812 + 0.376 * smoothstep( 0.26, 0.74, rk4.a );
+          // 3.4 px grit — the only band on this material that lands in HF, so it is both what
+          // keeps a distant flank from mipping down to a painted plate AND the whole of the
+          // frame's near/far detail ramp. MEASURED: with it ungated the far massif sits at 14.0
+          // HF_rms against a near field of 19-20, a ramp of 1.4 where the gate wants 1.6, and
+          // no amount of post-side low-pass can close it — five A/B'd settings of the present
+          // pass's pixel-band cut, up to a 0.98 mix toward the 4-tap ring, moved the far band
+          // by 5%, because mixing toward a ring average asymptotes. A material's detail has to
+          // shrink with its own FOOTPRINT, which is what rFin is, and only the material can do
+          // that. Two thirds of the amplitude survives at the back of the frame, so the flank
+          // still measures well clear of the 12 floor and still reads as rock.
+          rock *= 1.0 + ( smoothstep( 0.26, 0.74, rk4.a ) - 0.5 ) * 0.376 * mix( 0.30, 1.0, rFin );
 
           // snow: needs altitude, a face that is not sheer, and it favours the lee side.
           // Wind noise strips it off the exposed crest, so it never reads as a white wash.
@@ -2337,9 +2378,20 @@ export class Terrain {
         .replace('#include <lights_fragment_end>', /* glsl */`#include <lights_fragment_end>
           vec3 rdd = reflectedLight.directDiffuse / max( material.diffuseColor, vec3( 1e-4 ) );
           float rlit = clamp( max( rdd.r, max( rdd.g, rdd.b ) ) * 0.80, 0.0, 1.0 );
+          // THE MASSIF IS MOSTLY THIS MATERIAL, AND IT WAS THE DARKEST, GREYEST THING ON THE
+          // BOARD. MEASURED on the delivered PNG: the far massif came back at mean 107 against a
+          // near field at 107 and saturation 0.26 against the bible's 0.28 floor — i.e. distance
+          // was making the frame neither lighter nor more saturated, which is the aerial
+          // perspective rule failing on two axes at once, and lifting the GROUND shader's rock
+          // ambient did nothing because the rock the player is looking at is these instances.
+          // The lift is on the BOUNCE, which is this surface's own albedo: second-hand sunlight
+          // off warm rock raises value and chroma together and cannot rotate the shadow hue off
+          // the lit hue (measured: shadowed rock 33.7 deg, lit rock 33.3 deg). Snow is excluded —
+          // its albedo is already near the top of the curve and the same lift blows it white.
           reflectedLight.indirectDiffuse += material.diffuseColor
-            * ( vec3( 0.176, 0.174, 0.172 ) * mix( 1.16, 1.0, rlit )
-              + material.diffuseColor * vec3( 1.26, 1.10, 0.88 ) * 0.96 * mix( 1.06, 1.0, rlit ) );`);
+            * ( vec3( 0.192, 0.190, 0.188 ) * mix( 1.16, 1.0, rlit )
+              + material.diffuseColor * vec3( 1.26, 1.10, 0.88 )
+                * mix( 1.72, 0.96, snowAmt ) * mix( 1.12, 1.0, rlit ) );`);
     };
     return m;
   }
