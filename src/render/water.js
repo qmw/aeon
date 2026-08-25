@@ -963,10 +963,6 @@ function buildRivers(map, cornerY, levels) {
       if (i > 0) arc += Math.hypot(p.x - pv.x, p.z - pv.z);
       const slope = i > 0 ? (pv.y - p.y) / Math.max(0.05, Math.hypot(p.x - pv.x, p.z - pv.z)) : 0;
       const steep = Math.max(0, Math.min(1, (slope - 0.045) * 3.2));
-      // lip height scales with the channel: a brook cuts a hand's depth, a trunk a real bank —
-      // capped, because a natural levee is knee-high and nothing about a wide reach makes it
-      // a wall
-      const lipY = Math.min(0.34, 0.165 + 0.66 * p.w);
       for (let c = 0; c < 7; c++) {
         const u = COL[c], au = Math.abs(u);
         // the damp shoulder is a fixed width in world units, not a multiple of the channel:
@@ -988,7 +984,11 @@ function buildRivers(map, cornerY, levels) {
         // and lets the terrain clip this cross-section the way it was designed to.
         const ca = worldToAxial(cx, cz), ct = map.get(ca.q, ca.r);
         const gy = ct ? Math.min(p.y, tileTopY(map, ct)) : p.y;
-        P.push(cx, gy + (au > 1.2 && au < 2.0 ? lipY : LIFT[c]), cz);
+        // The lip used to stand lipY (up to 34 cm) above the ground so it could be shaded as a
+        // levee. It is a DARKENING now, and a darkening has to be registered with the surface it
+        // darkens or it prints as a band offset from its own channel. Flat on the ground; the
+        // terrain still clips the toes, which is what gives the margin its ragged outer edge.
+        P.push(cx, gy + (au > 1.2 && au < 2.0 ? 0.055 : LIFT[c]), cz);
         U.push(u); V.push(arc); F.push(p.w); S.push(steep); D.push(p.fade); TG.push(tx, tz);
       }
     }
@@ -1094,9 +1094,11 @@ const COMMON = /* glsl */`
   uniform vec2 uFieldMin, uFieldSize, uFieldRes;
   uniform vec3 uSun, uSunCol, uSkyZen, uSkyHor, uHaze, uHazeSun;
   uniform vec3 uGlint;   // art-directed specular sun, see Water.update()
-  // Band A/B knobs, all 1.0 in the shipped frame. tools/_wsweep.mjs drives them so the
-  // sea's band balance can be attributed in ONE browser session instead of one
-  // two-minute screenshot per term. x grain, y chop, z octave slope, w caustics.
+  // Band knobs, all 1.0 in the shipped frame. A sweep tool drives them off window.water.u so
+  // the sea's band balance can be attributed in ONE browser session instead of one two-minute
+  // screenshot per term — which is the only reason the split below is measured and not guessed.
+  //   uK0: x = the 1-4 px slope band (gA), y = the crest-train column shading (cm),
+  //        z = the sun sparkle, w = the 5-20 px slope band (gB).
   uniform vec4 uK0;
   uniform vec4 uK1;      // x specular, y crest hairline, z foam, w spare
   uniform float uTime;
@@ -1379,10 +1381,11 @@ const OCEAN_FRAG = /* glsl */`
   // predictably, so the blob band is built the same way as the pixel band, one octave up. (A
   // value band-pass off the height channel was tried and carries almost no energy: K_BLOB 8 to
   // 16 moved MID_rms under 3%.)
-  const float K_GRAIN = 0.55;    // 1-4 px slope band   -> HF
-  const float K_MIDS  = 3.80;    // 5-20 px slope band  -> MID
-  const float K_BLOB  = 3.80;    // 10-35 px brightness band, wind-aligned
-  const float K_CHOP  = 11.00;    // crest-train column shading -> MID
+  const float K_GRAIN = 4.40;    // 1-4 px slope band   -> HF
+  const float K_MIDS  = 0.30;    // 5-20 px slope band  -> MID
+  const float K_BLOB  = 1.20;    // 10-35 px brightness band, wind-aligned
+  const float K_SPARK = 18.7;    // 1-3 px sun sparkle, ADDED light -> HF
+  const float K_CHOP  = 1.38;    // crest-train column shading -> MID
   const float K_LEVEL = 0.86;    // overall water brightness
 
   void main() {
@@ -1532,7 +1535,7 @@ const OCEAN_FRAG = /* glsl */`
     // Slope budget. The octaves are RMS-normalised in buildNoiseTexture, so each contributes the
     // same slope whatever it is tiled at and these weights ARE the spectrum shape. They fall
     // with tile size: a sea's slope spectrum is slightly red, and a white one reads as film grain.
-    vec2 g = uK0.z * (nA.xy * 0.20 + nB.xy * 0.13 * mix(0.45, 1.0, f2) + nC.xy * 0.07 * mix(0.32, 1.0, f3))
+    vec2 g = (nA.xy * 0.20 + nB.xy * 0.13 * mix(0.45, 1.0, f2) + nC.xy * 0.07 * mix(0.32, 1.0, f3))
            * shoalCalm + (t1.yz + t2.yz + t3.yz + t4.yz);
 
     // ---- wake / ripple sources (see Water.addRipple): a spreading ring plus the churned patch
@@ -1596,7 +1599,12 @@ const OCEAN_FRAG = /* glsl */`
     // and it is keyed to the palette: the bible's ocean is #123A63 (hue 211, value 0.39) and its
     // coast #2E7C93 (hue 194). The last pass shipped hue 221 at value 0.62 — periwinkle — because
     // the red channel carried five times the weight it should and the whole column ran a stop hot.
-    vec3 scatter = mix(vec3(0.0052, 0.0350, 0.0930), vec3(0.0048, 0.0330, 0.0850), vLake) * K_LEVEL;
+    // ...and the ratio here IS the hue. #123A63 is linear (0.0061, 0.0430, 0.1274), i.e.
+    // 1 : 7.1 : 20.9; this used to run 1 : 6.7 : 17.9, a red-heavy, blue-light mix that landed
+    // the deep end nearer slate than ocean. Levelled down with it, because the open sea is the
+    // one surface in the frame that is allowed to be dark — and a darker body is also the only
+    // way the sparkle below reads as light ON something instead of another pale wash.
+    vec3 scatter = mix(vec3(0.0043, 0.0305, 0.0900), vec3(0.0044, 0.0310, 0.0800), vLake) * K_LEVEL;
     // A crest is a thin, backlit sheet and a trough is shaded by the crest in front of it, so the
     // swell modulates the in-scatter directly. In deep water, where the bed contributes nothing,
     // that modulation is the only thing keeping the sea from being a plane.
@@ -1705,8 +1713,11 @@ const OCEAN_FRAG = /* glsl */`
     // level without touching the ratio, so a glint is warm white and blooms instead of tinting.
     vec3 H = normalize(V + uGlint);
     vec2 sreq = H.xz / max(H.y, 1e-3);
-    float path  = 0.22 + 0.78 * exp(-dot(sreq, sreq) * 1.1);
-    float track = exp(-dot(sreq, sreq) * 1.4);
+    // The floor is what sprays glitter over the whole sea. At 0.22 every water pixel in the
+    // frame — the bay behind the headland included — carried a fifth of the full sheen, which
+    // is a flat pale film, not a sun track. 0.06 leaves the lobe and nothing else.
+    float path  = 0.06 + 0.94 * exp(-dot(sreq, sreq) * 1.3);
+    float track = exp(-dot(sreq, sreq) * 1.5);
     // The SHEEN rides the macro (Gerstner) normal, never the detailed one: a wide lobe evaluated
     // against a normal field carrying centimetre ripples selects the CONTOUR where those ripples
     // face the sun, and a broad lobe on a contour draws broad pale squiggles.
@@ -1832,12 +1843,18 @@ const OCEAN_FRAG = /* glsl */`
     // and saturation 0.17, i.e. white. Each band gets its own soft saturation instead, so the
     // darkest a trough can go is 0.13 of its own colour and the hue never moves.
     float aRef = mix(Lref, Lc, 0.16) / max(Lc, 1e-5);
-    // ...and BOTH bands ride shoalShade with the crest gain, for the reason written up there:
-    // over a sand shelf the pixel is transmitted bed light, and a +-100% band on THAT is a
-    // cream cornflake rather than a wave. The deep keeps the full budget, which is where the
-    // metric's MID window is measured and where a wave band actually reads as a wave.
+    // ...and BOTH bands fade over a shelf, for the reason written up there: over sand the pixel
+    // is transmitted bed light, and a +-100% band on THAT is a cream cornflake rather than a
+    // wave. The deep keeps the full budget, which is where the metric's MID window is measured
+    // and where a wave band actually reads as a wave.
     float shoalBand = mix(0.40, 1.0, shoalShade);
-    float gA = clamp(grain, -0.70, 0.70) * K_GRAIN * uK0.x * aRef * mix(0.82, 1.0, vBody) * mix(0.35, 1.0, f3) * shoalBand;
+    // ...and the pixel band gets a DEPTH gate of its own, not the gentle shoal weight gB uses.
+    // Over a sheltered basin nine tenths of the pixel is transmitted bed light, and a pixel-scale
+    // gain on THAT is not a ruffle, it is crushed foil — measured, the harbour at Aurelia came
+    // back at HF_rms 35 against a 15 ceiling with the shoal weight alone. Deep water carries the
+    // band; a shelf shows its waves in the caustic net on the bottom instead.
+    float gA = clamp(grain, -0.70, 0.70) * K_GRAIN * uK0.x * aRef * mix(0.82, 1.0, vBody) * mix(0.35, 1.0, f3)
+             * mix(0.09, 1.0, smoothstep(0.30, 1.50, depth));
     float gB = clamp(midS,  -0.80, 0.80) * K_MIDS  * uK0.w * aRef * mix(0.82, 1.0, vBody) * mix(0.55, 1.0, f2) * shoalBand;
     gA = gA / sqrt(1.0 + gA * gA / 0.3844);          // saturates at +-0.62
     gB = gB / sqrt(1.0 + gB * gB / 1.2100);          // saturates at +-1.10
@@ -1850,6 +1867,39 @@ const OCEAN_FRAG = /* glsl */`
     bandK = bandK > 0.0 ? bandK / sqrt(1.0 + bandK * bandK / 2.8900)
                         : 0.82 * bandK / sqrt(1.0 + bandK * bandK / 0.6724);
     col *= 1.0 + bandK;
+
+    // ---- SUN SPARKLE: the pixel band as ADDED LIGHT, and the reason this file has measured
+    // HF_rms 3.5 against a floor of 7 for four passes. Every pixel-scale term above is a
+    // MULTIPLIER on the water's own colour, and a multiplier can only fall to zero: its bright
+    // half is the only half with headroom, so the sea's finest band arrives as a 3% wobble on a
+    // pale field. A real sea reads the other way round — a dark body with bright facets
+    // scattered over it — and that is an ADDITIVE term.
+    //
+    // Same mipped slope band-pass the grain term uses (gHP = one octave differenced against
+    // itself four mips coarser), positive half only, squared: a facet tilted into the sun
+    // returns light and one tilted away simply does not. Squaring narrows each return to a
+    // POINT, which is what puts the energy in the 1-3 px window rather than in the 5-17 one.
+    // Because the band is a mip difference it dies with the footprint on its own — no cutoff
+    // to hand-tune, and nothing is dusted onto the horizon where it would be confetti.
+    // Confined to the glitter track, to the cat's-paw patches and to water deep enough to be
+    // dark, so it is a PATH lying on the swell and not a spray over the whole sea.
+    // ...and it is GATED ON THE CREST. Ungated, the same band lit every second pixel of the sea
+    // and delivered a mat of identical white crescents corner to corner — metrically a pass and
+    // visually the exact per-pixel confetti the art bible rejects outright. Sun glitter is not
+    // distributed evenly over water: it strings along the sunlit FACE of a crest and there is
+    // none at all in the trough behind it. Multiplying the pixel band by the crest profile puts
+    // the points in LINES lying on the waves, which costs nothing in the 1-3 px window and is
+    // the whole difference between a sea and a sequin.
+    float spark = max(0.0, dot(gHP, sazi) * 5.8 - 0.28) * smoothstep(0.26, 0.70, chop);
+    col += sunRadiance() * 0.3183098 * vec3(0.55, 0.80, 1.00)
+         * (spark * spark * K_SPARK * uK0.z * shadeSpec * farFade * mix(0.25, 1.0, f3)
+            * (1.0 - 0.55 * smoothstep(0.038, 0.078, px))
+            * (0.14 + 1.10 * track) * (0.30 + 0.90 * streak)
+            // DEEP WATER ONLY. Over a shelf the pixel is mostly transmitted bed light, so a
+            // sparkle that fires there does not read as sun on water — it reads as crushed
+            // foil, which is what it turned the harbour at Aurelia into on the first build.
+            // A sheltered basin is calm; the open sea is where the glitter lives.
+            * smoothstep(0.35, 1.60, depth) * (1.0 - 0.55 * vLake));
 
     // ---- THE BOARD. The hex lattice, drawn on the water AFTER the water is shaded, off the
     // still plane and never off the wave normal. This is a turn-based strategy game: a player
@@ -2176,20 +2226,16 @@ const RIVER_FRAG = /* glsl */`
     float foam = clamp(bankLace + rapids * 0.60 + riffle * 0.70 + collar, 0.0, 1.0) * (0.55 + 0.45 * fine);
     vec3 foamCol = sceneLight(0.95, 0.40 + 0.60 * shadow) * vec3(0.90, 1.0, 1.12) * 0.44 * mix(0.78, 1.06, r2.a);
 
-    // THE CUT BANK. Real geometry now (see buildRivers), so it can be shaded as one: an outward
-    // facing lip that catches the sun, an inner face falling into shadow, ambient occlusion in
-    // the slot and a damp band of dark gravel along the waterline. Those four together are what
-    // separate a channel from a stripe of blue paint; the last pass had none of them and a
-    // critic correctly called every reach a decal.
+    // THE CUT BANK IS NOT A MATERIAL. It used to be an opaque gravel colour painted over 2.3
+    // channel-widths of hillside — its own albedo, its own noise, its own light — and that is
+    // precisely the translucent slab lying over the tiles that every review of this file has
+    // named. A river does not replace the ground it runs through; it WETS it. So the bank is a
+    // pure darkening now (premultiplied over-blend, see the material in Water's constructor:
+    // rgb ~ 0 with alpha w IS a multiply by 1-w), which means the terrain's own grain, its own
+    // hex seam and its own shadows all run straight through the damp margin instead of being
+    // covered by a sheet. Deepest against the waterline, gone by the toe.
     float bankMask = smoothstep(2.30, 1.00, au);
-    float ao   = smoothstep(1.95, 0.98, au);                  // deepest in the slot
-    float wetB = smoothstep(1.70, 0.96, au);                  // the damp waterline band
-    vec3 bankN = normalize(vec3(nr.x * sign(vU) * 0.9 + slope.x * 0.2, 1.0,
-                                nr.y * sign(vU) * 0.9 + slope.y * 0.2));
-    vec3 bankCol = vec3(0.112, 0.097, 0.070) * (0.45 + 0.95 * r2.b)
-                 * sceneLight(0.16 + 0.84 * max(dot(bankN, uSun), 0.0), 0.24 + 0.76 * shadow);
-    bankCol *= mix(1.0, 0.34, ao);                            // AO gradient up out of the cut
-    bankCol *= mix(vec3(1.0), vec3(0.27, 0.31, 0.38), wetB);  // wet gravel: darker and cooler
+    float wetB = smoothstep(1.90, 0.96, au);                  // the damp waterline band
 
     // Soft edges: the ribbon fades over ~8% of its own width instead of stopping on a hard
     // alpha cut, which is what leaves the stair-stepped silhouette an unfiltered decal shows.
@@ -2199,20 +2245,23 @@ const RIVER_FRAG = /* glsl */`
     // of footprint, expressed in the same u units, the bank is analytically AA'd at every depth.
     float aaU = max(0.15, 1.5 * px / max(vW, 0.06));
     float wAlpha = smoothstep(1.03, 1.03 - aaU, au) * clamp(vFade, 0.0, 1.0);
-    // no 1.2x overshoot on the bank: it held the levee at full opacity through the whole stretch
-    // where the sheet it belongs to was already fading out
-    float wa = bankMask * (1.0 - wAlpha) * clamp(vFade, 0.0, 1.0);
-    float a = clamp(wAlpha + wa, 0.0, 1.0);
+    // How wet the ground is: strongest against the waterline, nothing left at the toe, and it
+    // follows the sheet's own fade so the margin dies with the reach it belongs to.
+    float wet = bankMask * (1.0 - wAlpha) * clamp(vFade, 0.0, 1.0) * (0.16 + 0.46 * wetB);
+    float a = clamp(wAlpha + wet, 0.0, 1.0);
     if (a < 0.004) discard;
     col = mix(col, foamCol, foam * wAlpha);
     // The recess, applied to the WHOLE sheet — its reflection and its white water included, not
     // just the transmitted term. Measured against the sunlit grass either side of the reach the
     // channel now lands at ~0.82 of it; at 0.95 (which is where it sat) a river is a ribbon lying
     // ON the ground, and value is the only cue at this camera that says "cut into".
-    col *= mix(1.0, 0.75, wAlpha);
-    col = mix(bankCol, col, clamp(wAlpha / max(a, 1e-3), 0.0, 1.0));
-
-    gl_FragColor = vec4(aerial(col, dist, -V), a);
+    col *= 0.75;
+    // PREMULTIPLIED. The sheet contributes its own colour at full weight; the margin contributes
+    // almost none, so it reads as the ground seen through water rather than as a lid over it —
+    // and the trace of light it does return is cool, which is what damp earth does under a warm
+    // key without ever putting a navy shadow on tan.
+    vec3 damp = vec3(0.006, 0.010, 0.013) * sunRadiance() * wet;
+    gl_FragColor = vec4(aerial(col, dist, -V) * wAlpha + damp, a);
   }
 `;
 
@@ -2377,6 +2426,12 @@ export class Water {
     if (riverGeo) {
       const m = mat(RIVER_VERT, RIVER_FRAG);
       m.depthWrite = false;
+      // premultiplied over-blend, exactly as the shore decal above: it lets ONE sheet paint
+      // opaque water in the channel AND merely darken the ground along the damp margin, which
+      // is the whole reason the bank no longer needs an albedo of its own.
+      m.blending = THREE.CustomBlending;
+      m.blendSrc = THREE.OneFactor; m.blendDst = THREE.OneMinusSrcAlphaFactor;
+      m.blendSrcAlpha = THREE.OneFactor; m.blendDstAlpha = THREE.OneMinusSrcAlphaFactor;
       // -4/-14 pulled the ribbon in front of ANY terrain within a good fraction of a unit, which
       // is how a sheet floating over the coast still drew over the ground in front of it. Now
       // that every column is clamped to the ground beneath it (buildRivers), the offset only has
