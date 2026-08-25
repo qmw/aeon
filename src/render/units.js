@@ -6,11 +6,11 @@
 // Same shader either way, so a bronze helmet, a linen tunic and a lit window all come out of
 // the same draw call.
 //
-// Units are a bone rig, not a skinned mesh: a figure is a list of (primitive, bone, colour,
-// local matrix). Per frame we build eight bone matrices and multiply each part through, so a
-// unit costs ~20 matrix multiplies and zero allocations, and every part lands in one of seven
-// InstancedMeshes. Buildings never animate, so each building type is merged once and
-// instanced across every city that uses it.
+// Units are a bone rig, not a skinned mesh: a figure is a named skeleton plus a list of
+// (primitive, bone, colour, local matrix). Per frame each bone is its parent times its own
+// local matrix and every part is multiplied through, so a unit costs ~30 matrix multiplies and
+// zero allocations, and every part lands in one of eight InstancedMeshes. Buildings never
+// animate, so each type is merged once and instanced across every city that uses it.
 
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
@@ -546,107 +546,201 @@ ${DETAIL_GLSL}`)
   return m;
 }
 
-// ============================================================ unit definitions
-// bones: 0 root  1 torso  2 head  3 armL  4 armR  5 legL/axle-front  6 legR/axle-rear  7 mount
+// ============================================================== the figure rig
+// ONE humanoid from a NAMED skeleton — pelvis, chest, neck, head, two upper arms, two forearms,
+// two grips, two thighs, two shins. Every bone's offset is in its PARENT's frame and every part
+// hangs off the joint it belongs to: a helmet on `head`, a boot on `shinR`, a shield on `gripL`.
+// Nothing here can express a helmet floating off a skull or an arm leaving a shoulder — those
+// defects are unreachable, not tuned away. A pose is a rest rotation on the same bones, and the
+// table at the bottom picks proportions, headgear, weapon, offhand and pose. The horse is the
+// same idea with four legs.
+
 const P = (g, b, c, mr, x, y, z, sx, sy, sz, rx, ry, rz) =>
   ({ g, b, c, mr, m: xf(x, y, z, sx, sy, sz, rx || 0, ry || 0, rz || 0) });
-
-// pivots for a standing man. Ground at y 0, crown near 0.80. Hips and shoulders are set WIDE
-// on purpose: the board camera looks DOWN at 55 degrees, so a limb tucked inside the torso's
-// own plan outline is a limb that does not exist. Stance width is what puts arms and legs back
-// into the silhouette, and "no arms or legs" was the review's first sentence about this cast.
-const HP = [[0, 0, 0], [0, 0.44, 0], [0, 0.665, 0], [0.136, 0.588, 0.010], [-0.136, 0.588, 0.010], [0.098, 0.385, 0.026], [-0.098, 0.385, -0.026], [0, 0, 0]];
-
-// ------------------------------------------------------------ SILHOUETTE KIT
-// MEASURED, then authored to it. At the shipped framing one unit-space unit projects to ~60 px
-// and the LOD cut in _step drops anything whose characteristic size is under ~0.055 — so a
-// foot soldier is ~55 px of figure and NOTHING under 3 px survives to be seen. The cast this
-// replaces carried 40-70 primitives per man (belt buckles, nasal bars, plank cleats, eye
-// sockets, five shield boards), every one of which also drew an inverted-hull contour: the
-// figure filled in with dark grit and the review's word for it was "smear".
-//
-// So each unit is blocked out as MASSES THAT STACK IN SCREEN SPACE —
-//   boots + legs  ->  belt  ->  livery torso  ->  dark face band  ->  bright helm
-// — with the limbs held clear of the body on both sides, and exactly one prop that breaks the
-// outline (sword diagonal, spear vertical, bow arc, horse profile, hat brim, wagon tilt).
-// Everything else was deleted. What is left is either bigger than the cut, or it is head
-// detail deliberately UNDER it, kept because the same defs render the unit-panel portrait at
-// 192 px where a face resolves.
-//
-// D() forces a part into the dark floor band (see _slots): the value ladder is
-// 0.11 floor / 0.375 mid / 0.615 metal accent, and it is decided per PART, not per material.
-// Bones 5 and 6 are already in the floor band, so nothing standing on them needs it.
+// D() drops a part into the dark floor of the value ladder (see _slots).
 const D = (p) => (p.lo = 1, p);
 
-// ---- mass 1: the lower body. Two tapered legs a stance apart, each ending in a BOOT that is
-// wider and deeper than the leg. From above the boots are the only part of the lower body that
-// clears the torso's outline, so without them a soldier has no feet — which is exactly how the
-// last pass read. They are also what puts two dark anchors on the contact shadow.
-const legs = (col = 0x3b3024) => [
-  P('limb', 5, col, M_CLOTH, 0, -0.148, 0.004, 0.100, 0.208, 0.108),
-  P('limb', 6, col, M_CLOTH, 0, -0.148, 0.004, 0.100, 0.208, 0.108),
-  P('box', 5, 0x2a2018, M_LEATH, 0, -0.336, 0.030, 0.116, 0.058, 0.180),
-  P('box', 6, 0x2a2018, M_LEATH, 0, -0.336, 0.030, 0.116, 0.058, 0.180),
-];
-// ---- mass 2: the torso, and it is the ONLY place the civ colour lands on a foot unit. TALLER
-// than it is wide now: the old one was 0.30 across by 0.26 high, i.e. a lozenge, and a lozenge
-// of saturated blue seen from above is the review's "blue bib with no arms or legs". Cut off
-// at the waist by a dark belt so the mid mass has a hard bottom edge instead of dissolving.
-const torso = (c = 'A') => [
-  P('caps', 1, c, M_CLOTH, 0, 0.080, 0, 0.268, 0.150, 0.186),
-  D(P('cyl', 1, C.leatherD, M_LEATH, 0, -0.082, 0, 0.272, 0.046, 0.192)),
-];
-// ---- mass 3: the head, and it is a HELMET first. The old skull was 0.15 across wearing a
-// beard and a brow, which at forty pixels is a pale ovoid with a smudge on it — the review's
-// "bald ovoid head with a smeared face". The cranium shrinks, each unit's helm grows over it
-// and a dark browband cuts the two apart, so the eye gets a bright dome, a hard dark line and
-// a small dark face under it. The brow and nose sit under the board's LOD cut on purpose: free
-// at gameplay zoom, and the portrait is the only place they are ever seen.
-const head = (skin = C.skin) => [
-  P('sph', 2, skin, M_SKIN, 0, 0.000, 0.020, 0.136, 0.152, 0.138),
-  D(P('sph', 2, C.hair, M_CLOTH, 0, -0.050, 0.046, 0.112, 0.056, 0.096)),   // jaw + beard
-  D(P('box', 2, 0x2b2018, M_LEATH, 0, 0.020, 0.080, 0.076, 0.018, 0.020)),  // brow (portrait)
-  P('sph', 2, skin, M_SKIN, 0, -0.014, 0.100, 0.046, 0.040, 0.034),         // nose (portrait)
-];
-// ---- arms. A dark pauldron caps each shoulder and the sleeve hangs OUTBOARD of it, so at a
-// 55-degree camera the arm clears the torso's plan outline by most of its own width. That gap
-// is the whole read: dark limb / mid cloth / dark limb across the widest part of the figure.
-const arms = (sleeve = C.cloak) => [
-  D(P('sph', 3, C.leatherD, M_LEATH, 0, 0.012, 0.004, 0.148, 0.112, 0.152)),
-  D(P('sph', 4, C.leatherD, M_LEATH, 0, 0.012, 0.004, 0.148, 0.112, 0.152)),
-  D(P('limb', 3, sleeve, M_CLOTH, 0.034, -0.118, 0, 0.092, 0.128, 0.094, 0, 0, 0.32)),
-  D(P('limb', 4, sleeve, M_CLOTH, -0.034, -0.118, 0, 0.092, 0.128, 0.094, 0, 0, -0.32)),
-];
-// ---- shield: a RIMMED round board, which is the entire difference between a shield and the
-// frying pan the review named. Three pieces and no more: a mid-value wooden face, a bronze rim
-// carrying the metal accent all the way round the outline, and one SMALL boss (the old one was
-// a third of the board — a pale ellipse in the middle of a dark disc, i.e. a pan). Turned off
-// the frontal plane so it reads as a disc in perspective rather than a plate facing the lens.
-const shield = (bone, x, y, z, r) => {
-  const rx = -0.12, ry = -0.36, rz = 0.14;
-  // the board's own normal, so the boss sits ON the face instead of beside it
-  const n = new THREE.Vector3(0, 0, 1).applyEuler(new THREE.Euler(rx, ry, rz)).multiplyScalar(r * 0.34);
+// animation tags, read by the bone loop in _step
+const AN = { TORSO: 1, HEAD: 2, ARM: 3, FORE: 4, THIGH: 5, SHIN: 6, MOUNT: 7, AXLE: 8, OAR: 9, THROW: 10 };
+
+// A bone row is [name, parent, x, y, z, tag, side, rest, swing]. `rest` is an euler pose or
+// 'up', which cancels the parent's accumulated rest rotation so a grip stands world-upright
+// whatever the arm under it does — that is how a spear stays vertical and a shield keeps facing
+// out with no hand-solved trigonometry anywhere in the file.
+function rig(rows) {
+  const bones = [], I = {};
+  for (const [n, par, x, y, z, a, sd, rest, sw] of rows) {
+    I[n] = bones.length;
+    const b = { par: par == null ? -1 : I[par], p: [x, y, z], a: a || 0, sd: sd || 0, sw: sw ?? 1, q: null, bind: new THREE.Matrix4() };
+    const pb = b.par < 0 ? null : bones[b.par];
+    if (rest === 'up') { pb.bind.decompose(_v, _q, _s); b.q = _q.clone().invert(); }
+    else if (rest) b.q = new THREE.Quaternion().setFromEuler(new THREE.Euler(rest[0] || 0, rest[1] || 0, rest[2] || 0));
+    b.bind.compose(_v.set(x, y, z), b.q || _q.identity(), _s.set(1, 1, 1));
+    if (pb) b.bind.premultiply(pb.bind);
+    bones.push(b);
+  }
+  return { bones, I };
+}
+const RIG = (rows) => rig([['root', null, 0, 0, 0], ...rows]);
+const mir = (r) => (r ? [r[0] || 0, -(r[1] || 0), -(r[2] || 0)] : null);
+
+// A standing man: ground 0, hip 0.40, shoulder 0.61, crown 0.82. Hips and shoulders sit WIDE on
+// purpose — at a 55-degree camera a limb inside the torso's plan outline is a limb nobody sees.
+function manBones(o) {
+  const t = o.tall ?? 1, w = o.wide ?? 1;
+  const arm = o.arm || [0, 0, 0.26], fore = o.fore || [-0.20, 0, 0];
   return [
-    P('sph', bone, C.woodD, M_WOOD, x, y, z, r * 1.90, r * 1.90, r * 0.42, rx, ry, rz),
-    P('rim', bone, C.kit, M_MET, x, y, z, r * 2.17, r * 2.17, r * 2.17, rx, ry, rz),
-    P('sph', bone, C.kit, M_MET, x + n.x, y + n.y, z + n.z, r * 0.44, r * 0.44, r * 0.40, rx, ry, rz),
+    ['pelvis', o.on || 'root', o.x || 0, (o.y || 0) + 0.400 * t, o.z || 0],
+    ['chest', 'pelvis', 0, 0.100 * t, 0, AN.TORSO, 0, o.spine],
+    ['neck', 'chest', 0, 0.140 * t, 0],
+    ['head', 'neck', 0, 0.055 * t, 0, AN.HEAD, 0, o.look],
+    ['armL', 'chest', 0.145 * w, 0.112 * t, 0, AN.ARM, 1, o.armL || arm, o.swL],
+    ['armR', 'chest', -0.145 * w, 0.112 * t, 0, AN.ARM, -1, o.armR || mir(arm), o.swR],
+    ['foreL', 'armL', 0, -0.152 * t, 0, AN.FORE, 1, o.foreL || fore, o.swL],
+    ['foreR', 'armR', 0, -0.152 * t, 0, AN.FORE, -1, o.foreR || mir(fore), o.swR],
+    ['gripL', 'foreL', 0, -0.150 * t, 0.010, 0, 0, 'up'],
+    ['gripR', 'foreR', 0, -0.150 * t, 0.010, 0, 0, 'up'],
+    ['thighL', 'pelvis', 0.100 * w, -0.018 * t, 0, AN.THIGH, 1, o.legs || [0, 0, 0.07]],
+    ['thighR', 'pelvis', -0.100 * w, -0.018 * t, 0, AN.THIGH, -1, mir(o.legs || [0, 0, 0.07])],
+    ['shinL', 'thighL', 0, -0.190 * t, 0, AN.SHIN, 1, o.shins],
+    ['shinR', 'thighR', 0, -0.190 * t, 0, AN.SHIN, -1, mir(o.shins)],
   ];
-};
-// ---- sword: a hard bright diagonal leaving the shoulder above helm height, laid out along its
-// own axis so grip, guard and point are on one line by construction — and a FIST closed on the
-// grip, because a blade growing straight out of a sleeve is the review's "no visible grip".
-const sword = (bone, rz = 0.52, len = 0.44) => {
-  const dx = -Math.sin(rz), dy = Math.cos(rz), hx = -0.062, hy = -0.238, hz = 0.026;
-  const p = (g, c, mr, t, sx, sy, sz) =>
-    P(g, bone, c, mr, hx + dx * t, hy + dy * t, hz, sx, sy, sz, 0, 0, rz);
-  return [
-    p('sph', C.skin, M_SKIN, -0.010, 0.086, 0.082, 0.086),                       // hand on the hilt
-    p('box', C.kit, M_MET, 0.064, 0.150, 0.030, 0.046),                          // crossguard
-    p('box', 0x6a7278, [0.42, 0.52, 0, 2], 0.064 + len * 0.5, 0.044, len, 0.023),
-    p('cone', 0x7a838a, [0.42, 0.52, 0, 2], 0.064 + len + 0.058, 0.044, 0.116, 0.023),
-  ];
+}
+
+// The same man's meat: masses that stack in screen space — boots, legs, belt, livery torso, dark
+// jaw, bright headgear — limbs held clear of the body, because that gap is what puts arms and
+// legs back into a forty-pixel silhouette.
+function manParts(I, o) {
+  const t = o.tall ?? 1, w = o.wide ?? 1;
+  const skin = o.skin ?? C.skin, sleeve = o.sleeve ?? C.cloak, leg = o.leg ?? 0x3b3024;
+  const p = [];
+  const at = (b, g, c, mr, x, y, z, sx, sy, sz, rx, ry, rz) => {
+    const q = P(g, I[b], c, mr, x, y, z, sx, sy, sz, rx, ry, rz); p.push(q); return q;
+  };
+  D(at('pelvis', 'sph', leg, M_CLOTH, 0, -0.012, 0, 0.262 * w, 0.126, 0.184));
+  for (const s of ['L', 'R']) {
+    D(at('thigh' + s, 'limb', leg, M_CLOTH, 0, -0.098 * t, 0.002, 0.106 * w, 0.112 * t, 0.112));
+    D(at('shin' + s, 'limb', leg, M_CLOTH, 0, -0.088 * t, 0.006, 0.092 * w, 0.104 * t, 0.098));
+    D(at('shin' + s, 'box', 0x2a2018, M_LEATH, 0, -0.158 * t, 0.036, 0.122, 0.058, 0.190));   // boot
+    D(at('arm' + s, 'sph', C.leatherD, M_LEATH, 0, 0.004, 0.004, 0.132, 0.102, 0.138));       // pauldron
+    D(at('arm' + s, 'limb', sleeve, M_CLOTH, 0, -0.080 * t, 0, 0.092, 0.088 * t, 0.094));
+    D(at('fore' + s, 'limb', o.bare ? skin : sleeve, o.bare ? M_SKIN : M_CLOTH, 0, -0.072 * t, 0, 0.082, 0.080 * t, 0.086));
+    at('fore' + s, 'sph', skin, M_SKIN, 0, -0.148 * t, 0.008, 0.066, 0.070, 0.066);           // fist
+  }
+  at('chest', 'caps', 'A', M_CLOTH, 0, 0.052 * t, 0, 0.268 * w, 0.112 * t, 0.188);            // the one livery mass
+  D(at('chest', 'cyl', C.leatherD, M_LEATH, 0, -0.062 * t, 0, 0.276 * w, 0.044, 0.196));      // belt
+  D(at('neck', 'cyl', skin, M_SKIN, 0, 0.014, 0.004, 0.086, 0.052, 0.082));
+  at('head', 'sph', skin, M_SKIN, 0, 0.046, 0.012, 0.132, 0.148, 0.138);
+  D(at('head', 'sph', C.hair, M_CLOTH, 0, 0.004, 0.040, 0.112, 0.058, 0.098));                // jaw + beard
+  D(at('head', 'box', 0x2b2018, M_LEATH, 0, 0.068, 0.070, 0.076, 0.017, 0.020));              // brow (portrait)
+  at('head', 'sph', skin, M_SKIN, 0, 0.034, 0.090, 0.044, 0.038, 0.032);                      // nose (portrait)
+  return p;
+}
+
+// ---- headgear. Always on `head`, so it cannot leave the skull.
+const HEAD = {
+  // bright dome / hard dark browband / dark jaw, top to bottom: the whole head read at 40 px
+  helm: (I) => [
+    P('sph', I.head, C.kit, M_HELM, 0, 0.068, 0.002, 0.160, 0.110, 0.158),
+    D(P('cyl', I.head, C.leatherD, M_LEATH, 0, 0.022, 0.006, 0.196, 0.038, 0.184)),
+    D(P('sph', I.head, 0x33281a, M_LEATH, 0, 0.092, 0.002, 0.042, 0.104, 0.172)),             // fore-aft comb
+  ],
+  cone: (I) => [P('cone', I.head, C.steel, M_HELM, 0, 0.098, 0.004, 0.208, 0.220, 0.208),
+    D(P('cyl', I.head, C.leatherD, M_LEATH, 0, 0.020, 0.006, 0.200, 0.036, 0.188))],
+  hood: (I) => [D(P('sph', I.head, C.cloak, M_CLOTH, 0, 0.038, -0.018, 0.182, 0.158, 0.186))],
+  hat: (I) => [D(P('cyl', I.head, C.thatchD, M_THATCH, 0, 0.084, 0, 0.330, 0.032, 0.330)),   // widest horizontal in the cast
+    P('cone', I.head, C.thatch, M_THATCH, 0, 0.146, 0, 0.236, 0.168, 0.236)],
+  cloth: (I) => [D(P('sph', I.head, C.linen, M_CLOTH, 0, 0.048, -0.012, 0.180, 0.152, 0.182)),
+    D(P('cyl', I.head, C.leatherD, M_LEATH, 0, 0.012, 0, 0.186, 0.032, 0.178))],
+  cap: (I) => [D(P('sph', I.head, C.leather, M_LEATH, 0, 0.056, -0.004, 0.160, 0.128, 0.160))],
 };
 
+// ---- weapon hand and shield forearm, authored on a GRIP: +Y is up, +Z is the way he faces.
+const HAND = {
+  spear: (I) => [D(P('cyl', I.gripR, C.woodD, M_WOOD, 0.010, 0.320, 0.022, 0.034, 0.92, 0.034)),
+    P('cone', I.gripR, C.steel, M_MET, 0.010, 0.900, 0.022, 0.070, 0.240, 0.070)],
+  // laid along the FOREARM's own axis, so fist, guard and point are on one line by construction
+  sword: (I) => [
+    P('box', I.foreR, C.kit, M_MET, 0, -0.188, 0, 0.152, 0.030, 0.048),
+    P('box', I.foreR, 0x6a7278, [0.42, 0.52, 0, 2], 0, -0.396, 0, 0.046, 0.400, 0.024),
+    P('cone', I.foreR, 0x7a838a, [0.42, 0.52, 0, 2], 0, -0.652, 0, 0.046, 0.120, 0.024, Math.PI, 0, 0),
+  ],
+  pick: (I) => [
+    D(P('cyl', I.gripR, C.woodD, M_WOOD, -0.038, 0.222, 0.010, 0.032, 0.72, 0.032, 0, 0, 0.18)),
+    P('cone', I.gripR, C.iron, M_MET, -0.140, 0.545, 0.010, 0.056, 0.300, 0.056, 0, 0, PI2 + 0.18),
+  ],
+  staff: (I) => [D(P('cyl', I.gripR, C.wood, M_WOOD, 0.008, 0.230, 0.030, 0.030, 0.86, 0.030, 0.10, 0, 0.06))],
+  lance: (I) => [
+    D(P('cyl', I.gripR, C.woodD, M_WOOD, 0.020, 0.300, 0.060, 0.032, 0.90, 0.032, 0.12, 0, 0.08)),
+    P('cone', I.gripR, C.steel, M_MET, -0.010, 0.830, 0.128, 0.062, 0.200, 0.062, 0.12, 0, 0.08),
+  ],
+};
+const OFF = {
+  // a RIMMED round board: mid-value face, a bronze rim carrying the accent right round the
+  // outline, one SMALL boss, turned off the frontal plane so it reads as a disc and not a plate.
+  shield: (I, r = 0.130) => {
+    const rx = -0.16, ry = 0.34;
+    const n = new THREE.Vector3(0, 0, 1).applyEuler(new THREE.Euler(rx, ry, 0)).multiplyScalar(r * 0.36);
+    const x = 0.012, y = 0.112, z = 0.034;
+    return [
+      P('sph', I.gripL, C.woodD, M_WOOD, x, y, z, r * 1.90, r * 1.90, r * 0.42, rx, ry, 0),
+      P('rim', I.gripL, C.kit, M_MET, x, y, z, r * 2.17, r * 2.17, r * 2.17, rx, ry, 0),
+      P('sph', I.gripL, C.kit, M_MET, x + n.x, y + n.y, z + n.z, r * 0.44, r * 0.44, r * 0.40, rx, ry, 0),
+    ];
+  },
+  // the bow arc reads at any size and nothing else in the roster has one
+  bow: (I) => [
+    P('arc', I.gripL, C.wood, M_WOOD, 0, 0.020, 0.030, 0.46, 0.46, 0.46, 0, PI2, 1.288),
+    D(P('cyl', I.gripL, C.rope, M_CLOTH, 0, 0.020, -0.045, 0.012, 0.36, 0.012)),
+  ],
+};
+
+// ------------------------------------------------------------- the roster table
+// proportions | headgear | weapon | offhand | pose. Everything else is shared.
+function man(o) {
+  const r = RIG(manBones(o)), I = r.I;
+  const parts = manParts(I, o);
+  if (o.hat) parts.push(...HEAD[o.hat](I));
+  if (o.hand) parts.push(...HAND[o.hand](I));
+  if (o.off) parts.push(...OFF[o.off](I));
+  if (o.extra) parts.push(...o.extra(I));
+  return {
+    rig: r, parts, flags: o.flags ? o.flags(I) : [],
+    foot: o.foot ?? 0.24, h: o.h ?? 0.90, gait: o.gait ?? 1,
+    hy: r.bones[I.head].bind.elements[13],
+  };
+}
+
+// ---- the horse: the same principle with four legs, and the rider's pelvis parented to its
+// back, so a seated man cannot slide off the saddle he is sitting on.
+function horseBones(o) {
+  return [
+    ['barrel', 'root', 0, 0.500, 0, AN.MOUNT],
+    ['hneck', 'barrel', 0, 0.115, 0.245, 0, 0, [0.62, 0, 0]],
+    ['hhead', 'hneck', 0, 0.250, 0, 0, 0, [1.28, 0, 0]],
+    ['legFL', 'barrel', 0.108, -0.050, 0.200, AN.THIGH, 1],
+    ['legFR', 'barrel', -0.108, -0.050, 0.200, AN.THIGH, -1],
+    ['legRL', 'barrel', 0.116, -0.050, -0.225, AN.THIGH, -1],
+    ['legRR', 'barrel', -0.116, -0.050, -0.225, AN.THIGH, 1],
+    ...manBones(o),
+  ];
+}
+function horseParts(I) {
+  const p = [];
+  const at = (b, g, c, mr, x, y, z, sx, sy, sz, rx, ry, rz) => {
+    const q = P(g, I[b], c, mr, x, y, z, sx, sy, sz, rx, ry, rz); p.push(q); return q;
+  };
+  at('barrel', 'caps', C.horse, M_SKIN, 0, 0, -0.02, 0.300, 0.330, 0.300, PI2, 0, 0);
+  at('barrel', 'sph', C.horseD, M_SKIN, 0, 0.010, -0.300, 0.318, 0.300, 0.270);              // rump
+  D(at('barrel', 'cone', C.dark, M_CLOTH, 0, 0.030, -0.400, 0.084, 0.330, 0.084, -0.42, 0, 0)); // tail
+  at('barrel', 'caps', 'A', M_CLOTH, 0, 0, -0.060, 0.322, 0.150, 0.322, PI2, 0, 0);            // caparison
+  at('hneck', 'caps', C.horse, M_SKIN, 0, 0.108, 0, 0.166, 0.150, 0.182);
+  D(at('hneck', 'box', C.dark, M_CLOTH, 0, 0.140, -0.055, 0.046, 0.310, 0.100));             // mane
+  at('hhead', 'box', C.horseD, M_SKIN, 0, 0.080, 0.004, 0.096, 0.180, 0.112);
+  for (const b of ['legFL', 'legFR', 'legRL', 'legRR'])
+    at(b, 'caps', C.horseD, M_SKIN, 0, -0.220, 0, 0.092, 0.220, 0.092);
+  return p;
+}
 
 const ALIAS = {
   scout: 'archer', swordsman: 'warrior', slinger: 'archer', worker: 'builder',
@@ -655,182 +749,121 @@ const ALIAS = {
 };
 
 const DEFS = {
-  // ---------------- warrior: crested helm, round shield left, sword raised right
-  warrior: {
-    foot: 0.24, h: 0.88, piv: HP, gait: 1,
-    parts: [
-      ...legs(), ...torso(), ...head(), ...arms(),
-      // HELM OVER SKULL, then a hard dark line under it. The dome is wider than the cranium
-      // and the browband is wider again, so the head silhouette is bronze-cap / dark-band /
-      // dark-jaw from the top down and there is no bald ovoid left to read.
-      P('sph', 2, C.kit, M_HELM, 0, 0.062, -0.008, 0.170, 0.122, 0.168),             // helm dome
-      D(P('cyl', 2, C.leatherD, M_LEATH, 0, 0.010, 0.006, 0.204, 0.042, 0.188)),     // brim
-      // CREST, and it runs FORE-AFT. A transverse fin sits behind the head at this camera and
-      // reads as a crate bolted to the helmet; a comb along the crown is a dark stripe straight
-      // down the middle of the dome, which is the one mark that turns a pale ovoid into a
-      // helmet from above. Dark, because a bright one fights the helm for the accent band.
-      D(P('sph', 2, 0x33281a, M_LEATH, 0, 0.098, -0.008, 0.058, 0.134, 0.220)),
-      ...shield(3, 0.098, -0.118, 0.152, 0.156),
-      ...sword(4),
+  // sword raised clear of the helm on one side, rimmed board on the other
+  warrior: man({
+    h: 0.90, hat: 'helm', hand: 'sword', off: 'shield',
+    armR: [0, 0, -1.00], foreR: [0, 0, -1.70], swR: 0.10,
+    armL: [0, 0, 0.30], foreL: [-1.05, 0, 0], swL: 0.20,
+  }),
+  // one long vertical out of the top of the frame — nothing else in the roster has one
+  spearman: man({
+    h: 0.92, hat: 'cone', hand: 'spear', off: 'shield', sleeve: C.wool,
+    armR: [0, 0, -0.26], foreR: [-0.20, 0, 0], swR: 0.10,
+    armL: [0, 0, 0.30], foreL: [-1.05, 0, 0], swL: 0.20,
+  }),
+  // bow arm forward across the body, string hand back at the chest
+  archer: man({
+    h: 0.88, gait: 0.9, hat: 'hood', off: 'bow', sleeve: C.wool, bare: 1,
+    armL: [-1.45, 0, -0.35], foreL: [0, 0, 0], swL: 0.05,
+    armR: [0.35, 0, -0.20], foreR: [-2.20, 0, 0], swR: 0.05,
+    extra: (I) => [
+      D(P('cyl', I.chest, C.leatherD, M_LEATH, -0.120, 0.020, -0.130, 0.098, 0.30, 0.098, 0.28, 0, 0.22)),
+      P('cone', I.chest, C.linen, M_CLOTH, -0.140, 0.170, -0.155, 0.050, 0.11, 0.050, 0.28, 0, 0.22),
     ],
-    flags: [],
-  },
-  // ---------------- spearman: one long line out of the top of the frame
-  spearman: {
-    foot: 0.24, h: 1.30, piv: HP, gait: 1,
-    parts: [
-      ...legs(), ...torso(), ...head(), ...arms(C.wool),
-      P('cone', 2, C.steel, M_HELM, 0, 0.104, 0, 0.190, 0.204, 0.190),               // conical helm
-      D(P('cyl', 2, C.leatherD, M_LEATH, 0, 0.012, 0.004, 0.196, 0.036, 0.180)),     // brim
-      ...shield(3, 0.100, -0.116, 0.156, 0.166),
-      D(P('cyl', 4, C.woodD, M_WOOD, -0.055, 0.190, 0.050, 0.036, 0.98, 0.036, 0, 0, -0.08)),
-      P('cone', 4, C.steel, M_MET, -0.100, 0.745, 0.050, 0.072, 0.26, 0.072, 0, 0, -0.08),
+  }),
+  builder: man({
+    h: 0.94, gait: 0.85, foot: 0.28, hat: 'hat', hand: 'pick',
+    armR: [0, 0, -0.26], foreR: [-0.30, 0, 0], swR: 0.15,
+    armL: [0, 0, 0.28], foreL: [-0.30, 0, 0],
+  }),
+  // stooped under everything he owns: the only bent back in the cast
+  settler: man({
+    h: 0.90, gait: 0.6, foot: 0.28, hat: 'cloth', hand: 'staff', sleeve: C.linen,
+    spine: [0.34, 0, 0], look: [-0.30, 0, 0], swL: 0.35, swR: 0.15,
+    armR: [0, 0, -0.30], foreR: [-0.32, 0, 0],
+    armL: [0, 0, 0.30], foreL: [-0.34, 0, 0],
+    extra: (I) => [
+      D(P('caps', I.chest, C.wool, M_CLOTH, 0, 0.070, -0.165, 0.240, 0.130, 0.165)),            // pack
+      D(P('cyl', I.chest, C.hide, M_LEATH, 0, 0.188, -0.145, 0.086, 0.290, 0.086, 0, 0, PI2)),  // bedroll
+      D(P('box', I.chest, C.rope, M_LEATH, 0, 0.060, 0.090, 0.230, 0.034, 0.070)),            // shoulder strap
     ],
-    flags: [],
-  },
-  // ---------------- archer: the bow arc reads at any size, and nothing else has one
-  archer: {
-    foot: 0.24, h: 0.86, piv: HP, gait: 0.9,
-    parts: [
-      ...legs(), ...torso(), ...head(), ...arms(C.wool),
-      D(P('sph', 2, C.cloak, M_CLOTH, 0, 0.042, -0.028, 0.178, 0.156, 0.182)),       // hood
-      P('arc', 3, C.wood, M_WOOD, 0.055, -0.205, -0.090, 0.50, 0.50, 0.50, 0, PI2, 1.29),
-      D(P('cyl', 3, C.rope, M_CLOTH, 0.055, -0.205, -0.118, 0.011, 0.44, 0.011)),
-      D(P('cyl', 1, C.leatherD, M_LEATH, -0.115, 0.030, -0.135, 0.100, 0.30, 0.100, 0.28, 0, 0.22)),
-      P('cone', 1, C.linen, M_CLOTH, -0.134, 0.180, -0.158, 0.050, 0.11, 0.050, 0.28, 0, 0.22),
-    ],
-    flags: [],
-  },
-  // ---------------- horseman: the horse IS the silhouette; the rider is three masses on top
-  horseman: {
-    foot: 0.4, h: 1.34, gait: 1, mounted: 1,
-    piv: [[0, 0, 0], [0, 0.72, -0.06], [0, 0.92, -0.06], [0.115, 0.855, -0.06], [-0.115, 0.855, -0.06], [0, 0.44, 0.22], [0, 0.44, -0.24], [0, 0, 0]],
-    parts: [
-      P('caps', 7, C.horse, M_SKIN, 0, 0.52, -0.05, 0.30, 0.34, 0.30, PI2, 0, 0),    // barrel
-      P('sph', 7, C.horseD, M_SKIN, 0, 0.52, -0.34, 0.32, 0.30, 0.27),               // rump
-      P('caps', 7, C.horse, M_SKIN, 0, 0.665, 0.295, 0.17, 0.20, 0.17, 0.70, 0, 0),  // neck
-      P('box', 7, C.horseD, M_SKIN, 0, 0.725, 0.500, 0.100, 0.115, 0.205, 0.55, 0, 0), // head
-      D(P('box', 7, C.dark, M_CLOTH, 0, 0.800, 0.275, 0.046, 0.115, 0.34, 0.70, 0, 0)), // mane
-      D(P('cone', 7, C.dark, M_CLOTH, 0, 0.545, -0.455, 0.082, 0.34, 0.082, -0.40, 0, 0)), // tail
-      P('caps', 5, C.horseD, M_SKIN, 0.115, -0.215, 0, 0.088, 0.215, 0.088),
-      P('caps', 5, C.horseD, M_SKIN, -0.115, -0.215, 0, 0.088, 0.215, 0.088),
-      P('caps', 6, C.horseD, M_SKIN, 0.118, -0.215, 0, 0.092, 0.215, 0.092),
-      P('caps', 6, C.horseD, M_SKIN, -0.118, -0.215, 0, 0.092, 0.215, 0.092),
-      P('box', 7, 'A', M_CLOTH, 0, 0.575, -0.100, 0.325, 0.230, 0.440),              // caparison
-      // rider
-      P('caps', 1, 'A', M_CLOTH, 0, 0.075, 0, 0.290, 0.128, 0.200),
-      D(P('cyl', 1, C.leatherD, M_LEATH, 0, -0.058, 0, 0.292, 0.050, 0.202)),
-      D(P('caps', 1, C.leatherD, M_LEATH, 0.172, -0.120, 0.060, 0.090, 0.140, 0.096, 0.95, 0, 0)),
-      D(P('caps', 1, C.leatherD, M_LEATH, -0.172, -0.120, 0.060, 0.090, 0.140, 0.096, 0.95, 0, 0)),
-      D(P('sph', 3, C.leatherD, M_LEATH, 0, 0.014, 0.004, 0.142, 0.108, 0.146)),
-      D(P('sph', 4, C.leatherD, M_LEATH, 0, 0.014, 0.004, 0.142, 0.108, 0.146)),
-      D(P('limb', 3, C.cloak, M_CLOTH, 0.030, -0.112, 0, 0.090, 0.122, 0.092, 0, 0, 0.30)),
-      D(P('limb', 4, C.cloak, M_CLOTH, -0.030, -0.112, 0, 0.090, 0.122, 0.092, 0, 0, -0.30)),
-      P('sph', 2, C.skin, M_SKIN, 0, 0.006, 0.018, 0.128, 0.138, 0.130),
-      D(P('sph', 2, C.hair, M_CLOTH, 0, -0.038, 0.044, 0.106, 0.060, 0.090)),        // jaw
-      P('sph', 2, C.kit, M_HELM, 0, 0.060, -0.008, 0.166, 0.120, 0.164),
-      D(P('cyl', 2, C.leatherD, M_LEATH, 0, 0.008, 0.006, 0.200, 0.042, 0.184)),     // brim
-      D(P('sph', 2, 0x33281a, M_LEATH, 0, 0.096, -0.008, 0.056, 0.132, 0.216)),      // crest
-      D(P('cyl', 4, C.woodD, M_WOOD, 0.020, 0.230, 0.040, 0.032, 0.92, 0.032, 0.10, 0, 0.07)),
-      P('cone', 4, C.steel, M_MET, 0.075, 0.720, 0.090, 0.062, 0.20, 0.062, 0.10, 0, 0.07),
-    ],
-    flags: [{ b: 4, x: 0.052, y: 0.480, z: 0.062, sx: 0.140, sy: 0.082, rz: 0.07 }],
-  },
-  // ---------------- settler: a hooped wagon, which is a shape nothing else in the roster has
-  settler: {
-    foot: 0.42, h: 0.92, gait: 0.55, wheels: 1, noLegs: 1,
-    piv: [[0, 0, 0], [0, 0.42, 0.58], [0, 0.635, 0.58], [0.125, 0.565, 0.58], [-0.125, 0.565, 0.58], [0, 0.155, 0.22], [0, 0.155, -0.22], [0, 0, 0]],
-    parts: [
-      D(P('box', 0, C.woodD, M_WOOD, 0, 0.235, -0.02, 0.44, 0.130, 0.68)),           // bed
-      P('cyl', 0, C.canvas, M_CLOTH, 0, 0.335, -0.02, 0.40, 0.62, 0.40, PI2, 0, 0),  // tilt
-      P('box', 0, 'A', M_CLOTH, 0, 0.535, -0.02, 0.090, 0.038, 0.60),                // civ ridge
-      D(P('ring', 0, C.woodD, M_WOOD, 0, 0.335, 0.30, 0.48, 0.48, 0.080)),
-      D(P('ring', 0, C.woodD, M_WOOD, 0, 0.335, -0.34, 0.48, 0.48, 0.080)),
-      D(P('box', 0, C.woodD, M_WOOD, 0, 0.200, 0.56, 0.055, 0.055, 0.44)),           // draw pole
-      D(P('cyl', 0, C.dark, M_WOOD, 0, 0.155, 0.22, 0.05, 0.52, 0.05, 0, 0, PI2)),
-      D(P('cyl', 0, C.dark, M_WOOD, 0, 0.155, -0.22, 0.05, 0.52, 0.05, 0, 0, PI2)),
-      D(P('ring', 5, C.woodD, M_WOOD, 0.245, 0, 0, 0.36, 0.36, 0.10, 0, PI2, 0)),
-      D(P('ring', 5, C.woodD, M_WOOD, -0.245, 0, 0, 0.36, 0.36, 0.10, 0, PI2, 0)),
-      D(P('ring', 6, C.woodD, M_WOOD, 0.245, 0, 0, 0.40, 0.40, 0.10, 0, PI2, 0)),
-      D(P('ring', 6, C.woodD, M_WOOD, -0.245, 0, 0, 0.40, 0.40, 0.10, 0, PI2, 0)),
-      // the robed leader walking ahead of the team
-      P('cone', 1, 'A', M_CLOTH, 0, -0.070, 0, 0.360, 0.500, 0.300),
-      P('sph', 2, C.skin, M_SKIN, 0, 0.010, 0.008, 0.140, 0.150, 0.144),
-      P('sph', 2, C.linen, M_CLOTH, 0, 0.028, -0.020, 0.180, 0.160, 0.180),          // headcloth
-    ],
-    flags: [],
-  },
-  // ---------------- builder: the widest horizontal in the roster is a hat brim
-  builder: {
-    foot: 0.3, h: 0.90, piv: HP, gait: 0.85,
-    parts: [
-      ...legs(), ...torso(), ...head(), ...arms(),
-      D(P('cyl', 2, C.thatchD, M_THATCH, 0, 0.098, 0, 0.334, 0.034, 0.334)),         // brim
-      P('cone', 2, C.thatch, M_THATCH, 0, 0.158, 0, 0.240, 0.170, 0.240),
-      D(P('cyl', 4, C.woodD, M_WOOD, -0.030, 0.180, -0.010, 0.032, 0.78, 0.032, 0.26, 0, 0.34)),
-      P('cone', 4, C.iron, M_MET, -0.300, 0.520, 0.100, 0.058, 0.34, 0.058, 0.26, 0, PI2 + 0.34),
-    ],
-    flags: [],
-  },
-  // ---------------- catapult: one hard diagonal over a low frame
-  catapult: {
-    foot: 0.42, h: 1.05, gait: 0.5, wheels: 1, noLegs: 1,
-    piv: [[0, 0, 0], [0.36, 0.40, -0.04], [0.36, 0.615, -0.04], [0, 0.36, -0.16], [0.485, 0.545, -0.04], [0, 0.155, 0.06], [0, 0.155, 0.06], [0, 0, 0]],
-    parts: [
-      D(P('box', 0, C.woodD, M_WOOD, 0.160, 0.265, 0, 0.060, 0.100, 0.74)),
-      D(P('box', 0, C.woodD, M_WOOD, -0.160, 0.265, 0, 0.060, 0.100, 0.74)),
-      D(P('box', 0, C.woodD, M_WOOD, 0, 0.215, 0.31, 0.38, 0.070, 0.080)),
-      D(P('box', 0, C.woodD, M_WOOD, 0, 0.215, -0.31, 0.38, 0.070, 0.080)),
-      P('box', 0, C.wood, M_WOOD, 0.160, 0.420, -0.16, 0.055, 0.36, 0.055, -0.30, 0, 0),
-      P('box', 0, C.wood, M_WOOD, -0.160, 0.420, -0.16, 0.055, 0.36, 0.055, -0.30, 0, 0),
-      D(P('box', 0, C.woodD, M_WOOD, 0, 0.565, -0.105, 0.38, 0.060, 0.060)),
-      D(P('cyl', 0, C.dark, M_WOOD, 0, 0.155, 0.06, 0.05, 0.54, 0.05, 0, 0, PI2)),
-      D(P('ring', 5, C.woodD, M_WOOD, 0.250, 0, 0, 0.40, 0.40, 0.11, 0, PI2, 0)),
-      D(P('ring', 5, C.woodD, M_WOOD, -0.250, 0, 0, 0.40, 0.40, 0.11, 0, PI2, 0)),
-      P('box', 3, C.wood, M_WOOD, 0, 0.300, 0, 0.080, 0.74, 0.080),                  // throwing arm
-      P('cyl', 3, C.woodD, M_WOOD, 0, 0.640, 0, 0.200, 0.120, 0.200),                // bucket
-      P('sph', 3, 0x8d8a82, M_PLAST, 0, 0.700, 0, 0.165, 0.145, 0.165),              // the shot
-      D(P('box', 3, C.stoneD, M_STONE, 0, -0.200, 0, 0.250, 0.200, 0.220)),          // counterweight
-      P('caps', 1, 'A', M_CLOTH, 0, 0.030, 0, 0.240, 0.155, 0.180),                  // crewman
-      P('sph', 2, C.skin, M_SKIN, 0, 0.010, 0.008, 0.135, 0.145, 0.140),
-      D(P('sph', 2, C.leather, M_LEATH, 0, 0.036, -0.006, 0.158, 0.134, 0.158)),     // cap
-    ],
-    flags: [],
-  },
-  // ---------------- trireme: long low hull, one mast, two banks of oars
-  trireme: {
-    foot: 0.55, h: 1.35, gait: 0, boat: 1, noLegs: 1,
-    piv: [[0, 0, 0], [0, 0.30, 0], [0, 0.30, 0], [0.20, 0.24, 0], [-0.20, 0.24, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]],
-    parts: [
-      D(P('caps', 0, C.woodD, M_WOOD, 0, 0.15, 0, 0.38, 0.70, 0.28, PI2, 0, 0)),     // hull
-      P('box', 0, 0xb49a6c, M_WOOD, 0, 0.255, 0, 0.32, 0.055, 1.08),                 // deck
-      D(P('box', 0, C.woodD, M_WOOD, 0, 0.225, 0, 0.42, 0.055, 0.040)),              // wale
-      P('box', 0, 'A', M_CLOTH, 0.170, 0.280, 0, 0.024, 0.070, 1.02),                // livery sheer
-      P('box', 0, 'A', M_CLOTH, -0.170, 0.280, 0, 0.024, 0.070, 1.02),
-      P('cone', 0, C.bronze, M_MET, 0, 0.11, 0.78, 0.16, 0.36, 0.16, PI2, 0, 0),     // ram
-      D(P('caps', 0, C.wood, M_WOOD, 0, 0.32, 0.50, 0.24, 0.24, 0.22, 1.15, 0, 0)),  // rising bow
-      D(P('arc', 0, C.woodD, M_WOOD, 0, 0.42, -0.62, 0.44, 0.44, 0.32, 0, PI2, 1.9)),// stern curl
-      P('cyl', 0, C.wood, M_WOOD, 0, 0.80, 0.06, 0.042, 0.68, 0.042),                // mast
-      D(P('cyl', 0, C.woodD, M_WOOD, 0, 1.04, 0.06, 0.032, 0.70, 0.032, 0, 0, PI2)), // yard
-      P('sph', 0, C.bronze, M_MET, 0, 1.13, 0.06, 0.064, 0.064, 0.064),              // truck
-      D(P('cyl', 3, C.wood, M_WOOD, 0.205, -0.080, 0.30, 0.030, 0.513, 0.030, 0, 0, -2.148)),
-      D(P('cyl', 3, C.wood, M_WOOD, 0.205, -0.080, 0.04, 0.030, 0.513, 0.030, 0, 0, -2.148)),
-      D(P('cyl', 3, C.wood, M_WOOD, 0.205, -0.080, -0.22, 0.030, 0.513, 0.030, 0, 0, -2.148)),
-      D(P('cyl', 4, C.wood, M_WOOD, -0.205, -0.080, 0.30, 0.030, 0.513, 0.030, 0, 0, 2.148)),
-      D(P('cyl', 4, C.wood, M_WOOD, -0.205, -0.080, 0.04, 0.030, 0.513, 0.030, 0, 0, 2.148)),
-      D(P('cyl', 4, C.wood, M_WOOD, -0.205, -0.080, -0.22, 0.030, 0.513, 0.030, 0, 0, 2.148)),
-    ],
-    // the sail is a flag: same flutter shader, just wider
-    flags: [
-      { b: 0, x: 0, y: 0.80, z: 0.06, sx: 0.62, sy: 0.44, ry: PI2, sail: 1 },
-      { b: 0, x: 0, y: 0.630, z: -0.60, sx: 0.150, sy: 0.090 },
-    ],
-  },
+  }),
+  // the horse IS the silhouette; the rider is three masses seated on it
+  horseman: (() => {
+    const o = {
+      on: 'barrel', y: -0.180, z: -0.020, tall: 0.98,
+      legs: [-0.95, 0, 0.30], shins: [1.30, 0, 0],
+      armR: [0, 0, -0.28], foreR: [-0.40, 0, 0], swR: 0.10,
+      armL: [-0.55, 0, 0.26], foreL: [-0.45, 0, 0], swL: 0.10,
+    };
+    const r = RIG(horseBones(o)), I = r.I;
+    return {
+      rig: r, foot: 0.40, h: 1.24, gait: 1, mounted: 1,
+      hy: r.bones[I.head].bind.elements[13],
+      parts: [...horseParts(I), ...manParts(I, o), ...HEAD.helm(I), ...HAND.lance(I)],
+      flags: [{ b: I.gripR, x: -0.010, y: 0.640, z: 0.100, sx: 0.130, sy: 0.078, rz: 0.08 }],
+    };
+  })(),
+  // one hard diagonal over a low frame
+  catapult: (() => {
+    const o = { on: 'root', x: 0.400, z: 0.150, tall: 0.94, sleeve: C.wool, swL: 0.5, swR: 0.5 };
+    const r = RIG([['axle', 'root', 0, 0.155, 0.06, AN.AXLE], ['throw', 'root', 0, 0.360, -0.16, AN.THROW], ...manBones(o)]);
+    const I = r.I;
+    const w = (x) => D(P('ring', I.axle, C.woodD, M_WOOD, x, 0, 0, 0.40, 0.40, 0.11, 0, PI2, 0));
+    return {
+      rig: r, foot: 0.42, h: 1.05, gait: 0.5, wheels: 1, flags: [],
+      hy: r.bones[I.head].bind.elements[13],
+      parts: [
+        D(P('box', 0, C.woodD, M_WOOD, 0.160, 0.265, 0, 0.060, 0.100, 0.74)),
+        D(P('box', 0, C.woodD, M_WOOD, -0.160, 0.265, 0, 0.060, 0.100, 0.74)),
+        D(P('box', 0, C.woodD, M_WOOD, 0, 0.215, 0.31, 0.38, 0.070, 0.080)),
+        D(P('box', 0, C.woodD, M_WOOD, 0, 0.215, -0.31, 0.38, 0.070, 0.080)),
+        P('box', 0, C.wood, M_WOOD, 0.160, 0.420, -0.16, 0.055, 0.36, 0.055, -0.30, 0, 0),
+        P('box', 0, C.wood, M_WOOD, -0.160, 0.420, -0.16, 0.055, 0.36, 0.055, -0.30, 0, 0),
+        D(P('box', 0, C.woodD, M_WOOD, 0, 0.565, -0.105, 0.38, 0.060, 0.060)),
+        D(P('cyl', 0, C.dark, M_WOOD, 0, 0.155, 0.06, 0.05, 0.54, 0.05, 0, 0, PI2)),
+        w(0.250), w(-0.250),
+        P('box', I.throw, C.wood, M_WOOD, 0, 0.300, 0, 0.080, 0.74, 0.080),                   // throwing arm
+        P('cyl', I.throw, C.woodD, M_WOOD, 0, 0.640, 0, 0.200, 0.120, 0.200),                 // bucket
+        P('sph', I.throw, 0x8d8a82, M_PLAST, 0, 0.700, 0, 0.165, 0.145, 0.165),               // the shot
+        D(P('box', I.throw, C.stoneD, M_STONE, 0, -0.200, 0, 0.250, 0.200, 0.220)),           // counterweight
+        ...manParts(I, o), ...HEAD.cap(I),
+      ],
+    };
+  })(),
+  // long low hull, one mast, two banks of oars
+  trireme: (() => {
+    const r = RIG([['oarL', 'root', 0.20, 0.24, 0, AN.OAR, 1], ['oarR', 'root', -0.20, 0.24, 0, AN.OAR, -1]]);
+    const I = r.I;
+    const oar = (b, x, z, rz) => D(P('cyl', b, C.wood, M_WOOD, x, -0.080, z, 0.030, 0.513, 0.030, 0, 0, rz));
+    return {
+      rig: r, foot: 0.55, h: 1.35, gait: 0, boat: 1, hy: 0.6,
+      parts: [
+        D(P('caps', 0, C.woodD, M_WOOD, 0, 0.15, 0, 0.38, 0.70, 0.28, PI2, 0, 0)),            // hull
+        P('box', 0, 0xb49a6c, M_WOOD, 0, 0.255, 0, 0.32, 0.055, 1.08),                        // deck
+        D(P('box', 0, C.woodD, M_WOOD, 0, 0.225, 0, 0.42, 0.055, 0.040)),                     // wale
+        P('box', 0, 'A', M_CLOTH, 0.170, 0.280, 0, 0.024, 0.070, 1.02),                       // livery sheer
+        P('box', 0, 'A', M_CLOTH, -0.170, 0.280, 0, 0.024, 0.070, 1.02),
+        P('cone', 0, C.bronze, M_MET, 0, 0.11, 0.78, 0.16, 0.36, 0.16, PI2, 0, 0),             // ram
+        D(P('caps', 0, C.wood, M_WOOD, 0, 0.32, 0.50, 0.24, 0.24, 0.22, 1.15, 0, 0)),          // rising bow
+        D(P('arc', 0, C.woodD, M_WOOD, 0, 0.42, -0.62, 0.44, 0.44, 0.32, 0, PI2, 1.9)),        // stern curl
+        P('cyl', 0, C.wood, M_WOOD, 0, 0.80, 0.06, 0.042, 0.68, 0.042),                        // mast
+        D(P('cyl', 0, C.woodD, M_WOOD, 0, 1.04, 0.06, 0.032, 0.70, 0.032, 0, 0, PI2)),         // yard
+        P('sph', 0, C.bronze, M_MET, 0, 1.13, 0.06, 0.064, 0.064, 0.064),                      // truck
+        oar(I.oarL, 0.205, 0.30, -2.148), oar(I.oarL, 0.205, 0.04, -2.148), oar(I.oarL, 0.205, -0.22, -2.148),
+        oar(I.oarR, -0.205, 0.30, 2.148), oar(I.oarR, -0.205, 0.04, 2.148), oar(I.oarR, -0.205, -0.22, 2.148),
+      ],
+      // the sail is a flag: same flutter shader, just wider
+      flags: [
+        { b: 0, x: 0, y: 0.80, z: 0.06, sx: 0.62, sy: 0.44, ry: PI2, sail: 1 },
+        { b: 0, x: 0, y: 0.630, z: -0.60, sx: 0.150, sy: 0.090 },
+      ],
+    };
+  })(),
 };
-// NO VEXILLUM ON FOOT UNITS. Every soldier used to carry a staff, a finial and a livery pennant
-// over his shoulder — three more primitives and a second saturated blue competing with the
-// torso for the same read, on a figure fifty pixels tall. Ownership is the torso; the crest,
-// the spear and the bow are what name the type.
+// NO VEXILLUM ON FOOT UNITS. A staff, a finial and a second saturated livery pennant on a
+// fifty-pixel figure compete with the torso for the same read. Ownership is the torso; the
+// crest, the spear, the bow and the hat brim are what name the type.
 
 // ============================================================ building meshes
 // Each returns one merged geometry, origin at the tile centre, y=0 on the ground.
@@ -2111,30 +2144,14 @@ export class Units {
       phase: Math.random() * 100, walk: 0, seed: (this._nextId * 2654435761) & 0xffff,
       path: null, seg: 0, t: 0, speed: def.boat ? 1.3 : (def.wheels ? 0.9 : 1.15),
       dist: 0, step: 0, slots: null, bone: [], gy: 0,
-      // SCALE LADDER. Measured, not guessed: at the shipped framing a hex spans ~130 px corner
-      // to corner and a foot soldier at 1.06 measured 33 px of body / 51 px including his
-      // standard — half of what the same unit occupies in the reference, which is why the
-      // review called them 25x30 px lumps. 1.68 puts the body at ~52 px and the standard tip
-      // at ~85 px, and a figure has to earn that many pixels before any amount of material
-      // work on it is visible at all. Cart and horse follow at the same ratio; the hull grows
-      // less (1.15) because it is already 1.25 long and a hex is only 2.0 across.
-      // Round 6: 1.60 put a foot soldier at 1.38 world units — 0.69 of a hex, taller than the
-      // town he garrisoned, and the reason a keep gate measured 0.28 of a man. A hex is 2.0
-      // corner to corner; 0.86 * 1.00 lands the figure at 0.43 hex widths, which is the
-      // reference's reading size, and every opening in the city kit is now authored against it.
-      // Round 7, MEASURED not guessed: tools/_upx.mjs reports a hex spanning 118 px centre to
-      // centre at the shipped framing and 1 world unit of HEIGHT projecting to ~40 px. A foot
-      // soldier at 1.05 therefore stood 36 px tall — a green lump the size of a bush, which is
-      // exactly what the review measured. 1.66 puts the body at ~57 px and a pike tip at ~85,
-      // i.e. 0.55 hex, the reference's reading size. Everything else follows the same ratio.
-      // Round 8, MEASURED (tools/_upx.mjs): at the shipped framing a hex spans 106 px centre
-      // to centre and a foot soldier at 1.66 projected 44 px of height — 0.41 of a hex, which
-      // is the "I cannot find the units" verdict. 2.20 puts him at ~58 px, i.e. 0.55 hex, the
-      // reference's reading size. A rider is already 1.30 tall before scale, so he needs less.
+      // SCALE LADDER, measured (tools/_upx.mjs) rather than guessed: at the shipped framing a
+      // hex spans 106 px centre to centre and one world unit of HEIGHT projects to ~40 px, so
+      // 2.55 puts a 0.90 foot soldier at ~58 px — 0.55 of a hex, the reference's reading size.
+      // A rider and a cart are already taller before scale, so they need less of it.
       scale: (spec.scale ?? 1) * (def.boat ? 1.72 : def.wheels ? 1.98 : def.mounted ? 1.95 : 2.55),
     };
     u.tYaw = u.yaw;
-    for (let i = 0; i < 8; i++) u.bone.push(new THREE.Matrix4());
+    for (let i = 0; i < def.rig.bones.length; i++) u.bone.push(new THREE.Matrix4());
     this.units.set(id, u);
     this._slotsDirty = true;
     return id;
@@ -2838,7 +2855,7 @@ export class Units {
       // colours move in value only: a tabard that drifts in hue stops naming its owner.
       const RW = rng(u.seed * 7 + 13);
       const dye = (RW() - 0.5), warm = (RW() - 0.5);
-      const bv = defV(u.def);
+      const bv = defV(u.def), hb = u.def.rig.I.head ?? -1;
       // -1 on bright sand or snow, +1 on forest floor and deep water: which way this figure's
       // mid band has to move so it never matches the ground it is standing on.
       const gnd = THREE.MathUtils.clamp((0.44 - (BIO_V[this.map.get(u.q, u.r)?.biome] ?? 0.44)) * 3.2, -1, 1);
@@ -2856,52 +2873,38 @@ export class Units {
         u.slots[i] = s;
         const livery = p.c === 'A' || p.c === 'B' || p.c === 'F';
         const col = p.c === 'A' ? u.team.a : p.c === 'B' ? u.team.b : p.c === 'F' ? u.team.flag : p.c;
-        const py = (u.def.piv?.[p.b]?.[1] ?? 0) + p.m.elements[13];
+        const py = u.def.rig.bones[p.b].bind.elements[13] + p.m.elements[13];
         _c.set(col);
         if (livery) _c.offsetHSL(0, -0.02 + RW() * 0.04, dye * 0.045);
         else _c.offsetHSL(warm * 0.030 + (RW() - 0.5) * 0.020, dye * 0.10 - 0.02, dye * 0.075 + (RW() - 0.5) * 0.045);
         _c.multiplyScalar(lerp(0.60, 1.0, THREE.MathUtils.smoothstep(py, -0.05, 0.42)));
-        // ---- THREE VALUES, AND ONE OF THEM IS ALWAYS OFF THE GROUND.
-        // The measured failure was a Warrior at value 110 standing on sand at 112: every part
-        // of him was authored inside one narrow band, so the whole figure welded to whatever
-        // it happened to be standing on. Two things fix it and neither touches the geometry.
-        // First, each part's lightness is pushed AWAY from the figure's own mean, so the cast
-        // carries a dark mass, a mid and a bright accent instead of one wash — a silhouette
-        // with three values in it cannot vanish into a single-valued background. Second, the
-        // whole figure is nudged a little off the value of the biome under its feet, so the
-        // mid band leans dark on sand and snow and light on forest floor.
+        // ---- THREE VALUES, AND ONE OF THEM IS ALWAYS OFF THE GROUND. Each part's lightness is
+        // pushed AWAY from the figure's own mean, so the cast carries a dark mass, a mid and a
+        // bright accent instead of one wash — a silhouette with three values in it cannot vanish
+        // into a single-valued background — and the whole figure is then nudged off the value of
+        // the biome under its feet, dark on sand and snow, light on forest floor.
         // sRGB, not the linear working space: these are AUTHORED values and the point is to
         // move them the way a painter would — reading HSL in linear space and centring on an
         // sRGB number turned the entire cast white in one line. Livery keeps its own value: it
         // is the ownership signal and stretching it is how a tabard becomes a headlight.
         const z = p.mr[3] || 0;
         _c.getHSL(_hsl, THREE.SRGBColorSpace);
-        // 0.33 was still the value of the LAND. Measured with tools/_ucontrast.mjs, a torso
-        // authored there arrives on screen at 89/255 against sand at 108 — a gap of 19 where
-        // the brief wants 64. A soldier under a golden-hour key reads DARK; the colour comes
-        // back off the bronze, the mantle and the base ring, not off the mass.
-        // and METAL is the other end of the same decision. Pushing the whole figure dark without
-        // lifting the helm, the boss and the pauldrons just makes a darker blob: the three-value
-        // read needs the accent as much as it needs the mass, so polished metal is centred a
-        // band and a half above everything else and is the only thing allowed near the top.
+        // THREE HARD BANDS, and which one a part lands in is decided by WHERE IT IS as much as
+        // by what it is made of: a bright crown, a mid mass, a dark base. Polished metal owns
+        // the accent (it is the only thing allowed near the top), the legs and boots own the
+        // floor, everything else is the mass, and the head gets half a band of lift so the
+        // silhouette always has a light top.
         const met = z === 2 || z === 11;
-        // THREE HARD BANDS, and which band a part lands in is decided by WHERE IT IS, not only
-        // by what it is made of. At forty pixels the eye reads a figure as a stack of three
-        // values top to bottom: a bright crown, a mid mass, a dark base. Polished metal owns
-        // the accent, the legs and boots own the floor, everything else is the mass — and the
-        // head gets half a band of lift on top so the silhouette always has a light top.
-        const lo = p.b === 5 || p.b === 6 || p.lo;
-        const cen = (met ? 0.615 : lo ? 0.11 : 0.375) + (p.b === 2 && !met ? 0.020 : 0) + gnd * 0.20;
+        const lo = p.lo;
+        const cen = (met ? 0.550 : lo ? 0.11 : 0.375) + (p.b === hb && !met ? 0.020 : 0) + gnd * 0.20;
         // Metal gets a NARROW band, not a big one: it is already the brightest thing in the
         // frame once the spec lobe is on it, and stretching pale steel the same way as wool put
         // a blown-white pickaxe head in the middle of the board.
         const l = livery ? THREE.MathUtils.clamp(_hsl.l * (0.96 + gnd * 0.26), 0.19, 0.46)
                          : cen + (_hsl.l - bv) * (met ? 0.50 : _hsl.l > bv ? 1.05 : 1.35);
-        // The ACCENT band belongs to metal. A linen tunic allowed up to 0.66 is the brightest
-        // mass on the figure — bigger than the helmet, brighter than the shield boss — and the
-        // eye lands on a shirt instead of on a soldier. Cloth, leather and skin top out below
-        // the polished-metal ceiling, so the hierarchy is bronze > cloth > wool > boots.
-        const cap = met ? 0.84 : lo ? 0.26 : 0.60;
+        // The ACCENT band belongs to metal: cloth, leather and skin top out below the polished
+        // ceiling, so the hierarchy is always bronze > cloth > wool > boots.
+        const cap = met ? 0.78 : lo ? 0.26 : 0.60;
         _c.setHSL(_hsl.h, _hsl.s, THREE.MathUtils.clamp(l, 0.05, cap), THREE.SRGBColorSpace);
         pr.mesh.setColorAt(s, _c);
         // roughness rides the same lot: a scuffed helmet and a polished one in the same file
@@ -3299,15 +3302,10 @@ export class Units {
     // tip below is the one that stands a figure up, and it works the same for every yaw.
     if (atk) _q.multiply(_q2.setFromEuler(_e.set(0.30 * atk, 0, 0)));
     // ---- STAND THE FIGURE UP, AWAY FROM THE LENS. At a 55-degree pitch a standing man
-    // projects as his own plan view — shoulders, helmet and shield lying flat — which is the
-    // whole of "unnameable smear". The fix is to tip him about the horizontal axis across the
-    // view so his long axis lies nearer the SCREEN's up direction, and the screen's up
-    // direction at this pitch leans AWAY from the camera, not toward it.
-    // MEASURED (tools/_ustand.mjs), because the sign is the entire difference: tipping toward
-    // the lens put the head bone EIGHT screen pixels above the feet on a figure that owns
-    // sixty — the tip was destroying the vertical it was written to rescue. Tipping the same
-    // 17 degrees the other way puts it back over eighty. The feet never move: the rotation is
-    // about the root, which is the pivot on the ground.
+    // projects as his own plan view, which is the whole of "unnameable smear". Tipping him
+    // about the horizontal axis across the view puts his long axis back near the SCREEN's up
+    // direction — and at this pitch that leans AWAY from the camera, not toward it. The feet
+    // never move: the rotation is about the root, which is the pivot on the ground.
     const ln = this._lean * (d.wheels ? 0.40 : 1);
     if (!d.boat && ln > 0.01) {
       const b = Math.atan2(this.camera.position.x - u.x, this.camera.position.z - u.z);
@@ -3333,48 +3331,47 @@ export class Units {
       if (u.die >= 1) { this.units.delete(u.id); this._slotsDirty = true; }
     }
 
-    const bones = u.bone, piv = d.piv;
+    // ---- the rig. Each bone is its PARENT times its own local matrix, so an animation on the
+    // chest carries the neck, the head, both arms and whatever they are holding with it. That
+    // parenting is the whole reason a helmet cannot drift off a skull here.
+    const bones = u.bone, BS = d.rig.bones;
     const breathe = 1 + Math.sin(this.time * 1.6 + u.seed) * 0.012 * idle;
-    for (let i = 1; i < 8; i++) {
-      const p = piv[i];
-      if (!p) { bones[i].copy(root); continue; }
-      let rx = 0, ry = 0, rz = 0, sy = 1, oy = 0, hs = 1;
-      if (i === 1) {                                   // torso
-        oy = Math.abs(sw2) * 0.022 * w;
-        rz = sw * 0.05 * w; rx = -0.04 * w + Math.sin(this.time * 1.6 + u.seed) * 0.012 * idle;
-        sy = breathe;
-      } else if (i === 2) {                            // head
-        hs = 0.90;                                     // see HP: the head was too big for the body
-        ry = Math.sin(this.time * 0.7 + u.seed * 1.3) * 0.22 * idle - sw * 0.05 * w;
-        rx = Math.sin(this.time * 0.9 + u.seed) * 0.06 * idle;
-      } else if (i === 3 || i === 4) {                 // arms / oars / throwing arm
-        const s = i === 3 ? 1 : -1;
-        if (d.boat) rx = Math.sin(ph + (i === 3 ? 0 : 0.25)) * 0.42;
-        else if (u.type === 'catapult' && i === 3) rx = -0.74 + Math.sin(this.time * 1.1 + u.seed) * 0.035;
-        else rx = -sw * s * 0.55 * w + Math.sin(this.time * 1.3 + u.seed + s) * 0.05 * idle;
-        rx += (i === 4 ? -2.0 : -0.5) * u.atkS;
-      } else if (i === 5 || i === 6) {                 // legs / axles
-        if (d.wheels) rx = u.dist * (i === 5 ? 1 : 1);
-        else if (!d.noLegs) rx = sw * (i === 5 ? 1 : -1) * (d.mounted ? 0.42 : 0.62) * w
-          + (d.mounted ? Math.sin(this.time * 1.1 + u.seed) * 0.02 : 0);
-      } else if (i === 7) {                            // mount body
-        oy = Math.abs(sw2) * 0.020 * w;
-        rx = -0.02 * w + Math.sin(this.time * 1.4 + u.seed) * 0.010 * idle;
+    for (let i = 1; i < BS.length; i++) {
+      const b = BS[i], s = b.sd;
+      let rx = 0, ry = 0, rz = 0, sy = 1, oy = 0;
+      switch (b.a) {
+        case 1:                                        // chest: sway and breath
+          oy = Math.abs(sw2) * 0.022 * w; rz = sw * 0.05 * w; sy = breathe;
+          rx = -0.04 * w + Math.sin(this.time * 1.6 + u.seed) * 0.012 * idle; break;
+        case 2:                                        // head: looks about when idle
+          ry = Math.sin(this.time * 0.7 + u.seed * 1.3) * 0.22 * idle - sw * 0.05 * w;
+          rx = Math.sin(this.time * 0.9 + u.seed) * 0.06 * idle; break;
+        case 3:                                        // upper arm, counter to its own leg
+          rx = (-sw * s * 0.55 * w + Math.sin(this.time * 1.3 + u.seed + s) * 0.05 * idle) * b.sw;
+          rx += (s < 0 ? -1.9 : -0.45) * u.atkS; break;
+        case 4:                                        // forearm: the elbow flexes as it comes back
+          rx = -0.34 * w * Math.max(0, -sw * s) * b.sw; break;
+        case 5:                                        // thigh, or a horse's leg
+          rx = sw * s * (d.mounted ? 0.34 : 0.62) * w; break;
+        case 6:                                        // shin: a knee only ever bends one way
+          rx = Math.max(0, sw * s) * 0.70 * w; break;
+        case 7:                                        // mount body
+          oy = Math.abs(sw2) * 0.020 * w;
+          rx = -0.02 * w + Math.sin(this.time * 1.4 + u.seed) * 0.010 * idle; break;
+        case 8: rx = u.dist; break;                                          // axle
+        case 9: rx = Math.sin(ph + (s > 0 ? 0 : 0.25)) * 0.42; break;        // oar
+        case 10: rx = -0.74 + Math.sin(this.time * 1.1 + u.seed) * 0.035; break;  // throwing arm
       }
-      _e.set(rx, ry, rz);
-      _m.compose(_v.set(p[0], p[1] + oy, p[2]), _q.setFromEuler(_e), _s.set(hs, sy * hs, hs));
-      bones[i].multiplyMatrices(root, _m);
-      // pivot correction: the local matrix already sits at the pivot, so parts are authored
-      // relative to it. Nothing else to do.
+      _q.setFromEuler(_e.set(rx, ry, rz));
+      if (b.q) _q.premultiply(b.q);
+      _m.compose(_v.set(b.p[0], b.p[1] + oy, b.p[2]), _q, _s.set(1, sy, 1));
+      bones[i].multiplyMatrices(bones[b.par], _m);
     }
 
-    // ---- parts. SILHOUETTE BUDGET. A soldier projects to about sixty pixels at gameplay
-    // zoom and this cast carries forty-odd primitives, every one of which also draws an
-    // inverted-hull contour. The sub-pixel furniture — a belt buckle, a nasal bar, a cloak
-    // clasp — therefore arrives not as detail but as a rim of dark grit that fills the figure
-    // in, which is exactly the "unnameable navy/rust smear with nine competing shapes" the
-    // review measured. Anything that cannot resolve to six pixels is dropped here; it still
-    // exists at portrait range, where the same test lets it back in.
+    // ---- parts. SILHOUETTE BUDGET. A soldier owns about sixty pixels at gameplay zoom and
+    // every primitive on him also draws an inverted-hull contour, so sub-pixel furniture — a
+    // brow, a nose, a neck — arrives as a rim of dark grit rather than as detail. Anything
+    // that cannot resolve to six pixels is dropped here and let back in at portrait range.
     const parts = d.parts;
     const cam = this.camera;
     const cut = (cam && this._pxk)
@@ -3472,10 +3469,8 @@ export class Units {
     // is just T(pivot) * its local placement — the same numbers the board uses, no rig needed.
     const geos = [];
     for (const p of def.parts) {
-      const pv = def.piv?.[p.b] ?? [0, 0, 0];
       const col = p.c === 'A' ? team.a : p.c === 'B' ? team.b : p.c === 'F' ? team.flag : p.c;
-      geos.push(tag(G[p.g], col, p.mr,
-        new THREE.Matrix4().makeTranslation(pv[0], pv[1], pv[2]).multiply(p.m)));
+      geos.push(tag(G[p.g], col, p.mr, new THREE.Matrix4().multiplyMatrices(def.rig.bones[p.b].bind, p.m)));
     }
     const geo = merge(geos);
     const sc = new THREE.Scene();
@@ -3494,8 +3489,8 @@ export class Units {
     const h = def.h || 0.86;
     geo.computeBoundingBox();
     const bb = geo.boundingBox;
-    const hy = (def.piv?.[2]?.[1] ?? h * 0.78) + h * 0.02;
-    const span = h * (def.mounted ? 0.86 : def.boat || def.wheels ? 1.15 : 0.70);
+    const hy = (def.hy ?? h * 0.78) + h * 0.02;
+    const span = h * (def.mounted ? 0.90 : def.boat || def.wheels ? 1.15 : 0.80);
     const d = span / (2 * Math.tan(13 * Math.PI / 180));
     const cam = new THREE.PerspectiveCamera(26, 1, 0.05, 40);
     const aim = new THREE.Vector3(
