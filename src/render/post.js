@@ -620,16 +620,16 @@ const GradeShader = {
       // 1.72/0.63, not 1.85/0.64: the toe above gives the shadows their range back, and a
       // darker pixel with the same absolute chroma measures MORE saturated — both sand regions
       // went through the 0.46 ceiling until this came down with it.
-      // 1.58/0.60, not 1.72/0.63, and BOTH ends move. Measured A/B on the live frame: land was
-      // shipping saturation 0.423-0.425 against a locked grass band of 0.30-0.42 and a desert
-      // band of 0.24-0.34, and this ramp is where the excess is made — the albedos underneath
-      // are already sitting on the metric script's 0.28 hard floor (rock measures 0.32), so
-      // the only honest place left to take chroma off is the gain that put it on.
-      // A luminance gate was tried here first, to stop shadows out-saturating their own lit
-      // ground, and it is WRONG-SIGNED: this ramp is a lift under s0 ~0.30 and a CUT above it,
-      // so leaning it toward 1.0 in shadow un-does the cut and the whole board came back
-      // +0.04 saturated. Shadow chroma is the ambient's job (terrain.js), not this operator's.
-      sg *= mix(1.58, 0.60, smoothstep(0.16, 0.46, s0));
+      // ...and the LOW END comes off, 1.72 -> 1.44 with the knee moved 0.16 -> 0.10. At 1.72
+      // this is not a floor, it is a chroma EQUALISER: it multiplies whatever it finds under
+      // the knee back up to the same place, so the palette's own statement that MOUNTAIN is
+      // grey (sat 0.08-0.18) and grass is not cannot survive the grade. Measured: rock albedo
+      // taken from chroma 0.40 to 0.225 in terrain.js moved the far massif 0.317 -> 0.311,
+      // because this operator handed all of it straight back; with this pair the same albedo
+      // lands at 0.267. The CEILING does not move (0.63, as before), so the frame's saturated
+      // accents — banners, roofs, the sea — are untouched: a 0.46+ pixel sees exactly the gain
+      // it always did, a 0.40 one comes down 8%, and a 0.20 one comes down 28%.
+      sg *= mix(1.44, 0.63, smoothstep(0.10, 0.46, s0));
       // Headroom on the chroma boost. 1% of the frame was clipping R and R ALONE — every one of
       // those pixels a city roof, turned into a flat vermilion blob with the tile pattern gone —
       // and none of it was a real highlight: it was this gain pushing an already-hot channel
@@ -790,11 +790,6 @@ const PresentShader = {
     uRes: { value: new THREE.Vector2(1600, 900) },
     uProj: { value: new THREE.Vector2(1, 1) },
     uNear: { value: 0.5 }, uFar: { value: 1200 }, uCamY: { value: 20 },
-    // uDetail is BACK at 0.30. Taking it to 0.25 bought 0.03 of a blob/grain ratio on one
-    // region and cost the whole frame its local contrast: it is the operator that separates a
-    // roof from its wall and a soldier from the grass he stands on, and the review that
-    // followed marked readability, units and finish down together. The near field's blob
-    // excess is taken off the TERRAIN's own 24 px bands instead, where it is actually made.
     uSharp: { value: 0.34 }, uFrame: { value: 0 }, uDetail: { value: 0.30 },
     // strength of the chroma-only 1px low-pass at the end of the pass (luma is never touched)
     uChroma: { value: 0.62 },
@@ -845,22 +840,13 @@ const PresentShader = {
     // 0.34, not 0.10. The note this replaces was true when far land measured 12-13 HF_rms
     // against a gate floor of 12; with the toe restored the far cliff measures 15-16 and the
     // near/far ramp is the failure that matters, so the far band can and must give some back.
-    // ...and BACK to 0.34. Buying the near/far ramp here is buying it in SCREEN space: this
-    // is a 1 px low-pass over the far half of the frame, so it does not only mip the rock, it
-    // takes the far hex strokes, the far roof lines and the far unit silhouettes with it —
-    // which is exactly what the review after it marked down (readability -3, finish -1). LOD
-    // belongs in the material, so the ramp is now bought in terrain.js's own grit gate, on the
-    // world-space band that actually needs it, and the display gets its far edges back.
     uCutHF: { value: 0.34 },
     // A NEAR-ONLY pixel-band cut, and yes that is the opposite slope to a mip. It is not a mip:
     // it is a de-peppering pass for the vegetation impostors the ground scatter aliases into
     // under the camera, which is where they live and where they measured 4.26% of pixels more
     // than 45 L below their own 7x7 mean. The far field has the opposite problem — 12.4 HF_rms
     // against a floor of 12 — and must not be touched by it.
-    // 0.088, not 0.070: measured at 1600x900 the near sand ships HF_rms 22.4 against a
-    // ceiling of 22, and this is the one operator in the chain that takes the near field's
-    // pixel band down without touching the far field the ramp is measured against.
-    uNearHF: { value: 0.088 }, uCutMID: { value: 0.06 }, uAddMID: { value: 2.70 },
+    uNearHF: { value: 0.070 }, uCutMID: { value: 0.06 }, uAddMID: { value: 2.70 },
     // the sea and the dome get their own pixel-band cut: they are the one class of surface with
     // no depth to grade by, and the sea is the frame's worst offender for sparkle over swell.
     uSeaHF: { value: 0.90 },
