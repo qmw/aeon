@@ -73,50 +73,88 @@ generated a long run of bogus "the near field is blurry" critiques before anyone
 The **game** is done: a full match plays start to finish, the 260-turn headless simulation passes
 every invariant, and `npx vite build` ships a static bundle.
 
-The **renderer** is closer than it was, and still not there. A referee agent scores the frame against
-a real Civilization VI screenshot on six independent axes; the current frame stands at **57/100**:
+The **renderer** is closer than it was and still not there — but it moved this phase, after nine
+straight attempts that could not land anything. The reason was the gate.
 
-| lighting | material | readability | units | colour | finish | total |
-|---|---|---|---|---|---|---|
-| 20/30 | **8/20** | 9/15 | 6/15 | 6/10 | 8/10 | **57/100** |
+### Scoring is retired; the gate is a tournament
 
-What holds up: one unifying warm key with the shadow hue within a couple of degrees of the lit hue,
-correct aerial perspective on land, the hex grid on grass, sand and plains, coast foam, the keep
-silhouette, a HUD with no clipping anywhere, and clean ends of the histogram — 0.07 of the frame
-crushed, none of it blown.
+For ten phases a referee agent scored the frame 0–100 against a real Civilization VI screenshot on
+six axes, and a change was kept if the number went up. The problem was noise — about a point per
+axis and about three on the total, which is the size of a real improvement. Twice the score gate
+threw away the best frame the project had ever rendered and both had to be restored by hand
+(`14fb0ff`, `6a17231`); three consecutive phases then reverted nine attempts out of nine.
 
-What does not, in the referee's priority order:
+Every attempt is now put **side by side against the reigning champion frame** and shown to two
+independent judges, with the labels in opposite order so position cannot bias them. It is kept only
+if **both** judges pick the challenger. Nobody is asked for a number — they are asked the only
+question this project is actually judged on: which of these two is better.
 
-1. **Ground material is screen-space, not world-space.** The near/far detail ramp measures 1.54
-   against a 1.6 requirement, near and mid sand run HF 22.6 and 23.7 against a 22 confetti ceiling,
-   and the referee finds the far plain collapsed the other way, to HF 5 at MID/HF 2.13 — blurry
-   nothing. Both ends are one bug: detail drawn at pixel scale instead of at a fixed world size.
-   Weakest axis at 8/20.
-2. **The hex grid vanishes across the mountain band** — about a third of the frame with no clickable
-   tile boundary, in a game played by clicking tiles. Art-bible non-negotiable #1.
-3. **Mountains are intersecting flat shards.** Hard polygon seams, adjacent faces disagreeing about
-   where the sun is, paper-white snow caps and a milky near-white void where the summits should have
-   volume.
-4. **Land saturation runs hot against the locked palette** — grass measures 0.45–0.55 against a
-   0.30–0.42 spec, sand 0.42–0.47 against desert's 0.24–0.34 — and open ocean sits at coast
-   brightness instead of the specified `#123A63`.
-5. **Rivers read as hard-edged unlit cyan cutouts**, with a translucent slab laid over the tiles
-   instead of a channel cut into them.
-6. **Units still do not name themselves at gameplay zoom** (6/15, up from 3/15). Close up they
-   resolve into sword-and-shield soldiers; at the distance the hero frame is played at, an occupied
-   tile is a strength badge and a contact ring over a mound.
+One phase of evidence, so read it as a signal rather than a proof:
 
-Blind judging still picks the real Civ VI immediately, and the objective gate agrees:
-`tools/metrics.mjs` on the shipped `shots/final-hero.png` reports **FAIL** on seven counts. All of it
-is written up with the measurements behind it, in priority order, in `docs/RESUME.md`.
+| pass | outcome |
+|---|---|
+| terrain — rock gets its mineral chroma back | accepted |
+| water — a pixel band the sea can keep, glitter back in its lobe, the river's gravel slab becomes a wet margin | accepted |
+| massif — one closed summit mass per hex, real instance normals, snow off the tonemap shoulder | accepted, and **promoted to champion** |
+| units — helmet, sword, shield, idle facing | **lost, reverted whole** (`74ecef7`) |
 
-Ten phases in, the whole-frame score went 61 → 34 → 22 under parallel agents, then climbed to 50
-under sequential single-owner passes with a revert gate, and to 57 once that gate stopped rejecting
-every trade. The most useful thing in this repo may be that record: `docs/RESUME.md` documents which
-gate designs ratcheted and which stalled — including one so strict it discarded the best frame the
-project had ever rendered over a single point on a single axis, and the looser rule that had to put
-it back. The three passes since have reverted nine attempts out of nine: the remaining defects are
-coupled, and none of them is a one-file fix.
+Three of four passes landed, against nine straight failures under the score gate on the same
+defects. The objective gate agrees the frame moved: `tools/metrics.mjs` on the released hero frame
+went from **seven failures to three**.
+
+| check | phase 10 | now |
+|---|---|---|
+| near/far detail ramp (≥ 1.6) | 1.54 ✗ | **1.63 ✓** |
+| water HF_rms (7–15) | 3.52 ✗ | **9.09 ✓** |
+| water MID/HF (0.9–1.3) | 3.92 ✗ | **1.19 ✓** |
+| near-sand saturation (≤ 0.46) | 0.467 ✗ | **0.436 ✓** |
+| mid-sand HF_rms (≤ 22) | 23.69 ✗ | 23.70 ✗ |
+| near-sand HF_rms (≤ 22) | 22.61 ✗ | 22.98 ✗ |
+| near-sand MID/HF (≤ 1.3) | 1.36 ✗ | 1.36 ✗ |
+
+0.08 of the frame crushed, 0.00 blown — the ends of the histogram stay clean.
+
+The catch is the one a paired comparison is supposed to have: it punishes a change that improves one
+thing while visibly costing another, which is most changes. The unit pass was reverted whole for
+exactly that.
+
+### What is still weakest
+
+Judge verdicts are not archived — only the accept/revert decision reaches git — so this is the
+outstanding list as the champion frame and the objective gate show it, with the pass that lost the
+last comparison at the top. `shots/final-hero.png` **is** the champion frame; it is what the next
+challenger has to beat.
+
+1. **Units are giants with no arms.** The one pass since the champion was crowned was a units pass,
+   and it lost. In `final-close.png` the garrison soldier stands as tall as Aurelia's keep tower,
+   and his sword and shield hang at his sides with no arm reaching either one; in `final-wide.png`
+   a single soldier is the height of the walled town beside him. Back at the distance the hero
+   frame is played at, the same figure collapses to a strength badge and a contact ring over a
+   mound — too big to be a man, too vague to be a warrior.
+2. **The near field is confetti over blobs.** All three surviving gate failures are in the two sand
+   boxes nearest the camera: HF 23.7 and 23.0 against a 22 ceiling, MID/HF 1.36 against 1.3. The
+   distance falloff is fixed — the ramp passes at 1.63 for the first time in the project — but near
+   ground still reads as leopard-spot mottling at cloud-shadow scale with pixel fizz on top,
+   instead of grain at a nameable world size.
+3. **Mountains are the right shape on the wrong rock.** The massif pass gave them a closed summit
+   mass per hex, correct instance normals and a hex seam that survives on rock — all new, all real
+   gains. They now read as tan sandstone wedges: the far-rock box measures saturation 0.29 at hue
+   33° against the locked mountain `#7A7368` (sat 0.08–0.18), shard edges stay hard, and the snow
+   caps are flat paper-white triangles rather than lit volume.
+4. **Per-biome palette compliance.** Whole-frame saturation now sits inside the metrics band, but
+   the bible is written per biome and sand at 0.43 is still well over desert's 0.24–0.34. Open
+   ocean at mean 129 is nearer coast brightness than the specified `#123A63`.
+5. **Rivers.** The translucent slab is thinner and the bank is a wet margin now, but the channel is
+   still a chain of flat angular plates laid along the hex edges rather than a bed cut into the
+   terrain, and it takes no sun.
+6. **The hex seam on rock is present but faint.** Non-negotiable #1 is no longer outright broken
+   across the mountain band, which is new — but the line there is far weaker than on grass and it
+   loses wherever the rock goes bright.
+
+No one has yet put this frame beside a real Civ VI screenshot under the tournament rules; the last
+time that comparison was run, the judge picked the real one immediately. The measurements, the per-phase record and
+the gate designs that ratcheted versus the ones that stalled are in `docs/RESUME.md` — that record
+may still be the most useful thing in this repo.
 
 Contributions welcome — `docs/ART-BIBLE.md` (the locked direction) and `tools/metrics.mjs` (the
 objective gate) are the two things to read first.
