@@ -1,87 +1,105 @@
-# Resume notes — paused 2026-08-25 (end of phase 9)
+# Resume notes — paused 2026-08-25 (end of phase 10)
 
 ## State
-Referee scores the whole frame on six independent axes. Standing frame at HEAD:
+The referee scores the whole frame on six independent axes. Standing frame at HEAD:
 
 | axis | score | what it measures |
 |---|---|---|
-| lighting | **18** / 30 | cast shadows landing, contact AO, one unifying sun, shadow hue within ~10° of lit hue |
-| material | **9** / 20 | world-space detail shrinking with distance, no confetti, no flat-matte |
-| readability | **8** / 15 | hex grid legible everywhere incl. mountains, biomes distinguishable |
-| units | **3** / 15 | silhouettes nameable at gameplay zoom, grounded, not clay |
+| lighting | **20** / 30 | cast shadows landing, contact AO, one unifying sun, shadow hue near the lit hue |
+| material | **8** / 20 | world-space detail shrinking with distance, no confetti, no flat-matte |
+| readability | **9** / 15 | hex grid legible everywhere incl. mountains, biomes distinguishable |
+| units | **6** / 15 | silhouettes nameable at gameplay zoom, grounded, not clay |
 | colour | **6** / 10 | palette compliance, no cast, aerial perspective lighter-cooler-desaturated |
-| finish | **5** / 10 | no mesh holes, blown voids, aliasing, streaks, z-fighting, clipped UI |
-| **total** | **49** / 100 | |
+| finish | **8** / 10 | no mesh holes, blown voids, aliasing, streaks, z-fighting, clipped UI |
+| **total** | **57** / 100 | best recorded; scored on `shots/verify-57.png`, which is the same build as the released frames |
 
-- `node tools/sim.mjs` passes: 260 turns, 26 cities, 32 techs, 11 wars, culture victory.
-- `npx vite build` succeeds; the site deploys from `dist/`.
-- Latest frames: `shots/final-hero.png`, `shots/final-wide.png`, `shots/final-close.png` (1600x900,
-  directed via `?shot=hero|wide|close`; each captured `blank:false errors:[]`).
-- The objective gate still **FAILS** on the released frame. Measured on `shots/final-hero.png`
-  (`node tools/metrics.mjs shots/final-hero.png 200,120,200,140:far-rock 700,430,200,140:mid-sand 620,760,200,140:near-sand 1150,200,240,160:water`):
+- `node tools/sim.mjs` passes: 260 turns, 26 cities, pop 4->341, 57 units, the 32-tech tree exhausted by
+  three of four civs, 11 wars and 6 peaces, 14449 pathed tiles with 0 read through fog,
+  culture victory to Vellum. Worst turn 15 ms.
+- `npx vite build` succeeds; GitHub Actions rebuilds `dist/` on push and deploys it.
+- Released frames: `shots/final-hero.png`, `shots/final-wide.png`, `shots/final-close.png`
+  (1600x900, directed via `?shot=hero|wide|close`; each captured `blank:false errors:[]`).
+- The objective gate still **FAILS** on the released frame:
+
+  `node tools/metrics.mjs shots/final-hero.png 200,120,200,140:far-rock 700,430,200,140:mid-sand
+  620,700,240,160:near-sand 1200,300,240,160:water`
 
   | region | mean | sat | hue | HF_rms | MID/HF |
   |---|---|---|---|---|---|
   | far-rock | 121.3 | 0.317 | 34.5 | 14.64 | 1.00 |
-  | mid-sand | 100.0 | 0.460 | 65.5 | **23.69** | 1.10 |
-  | near-sand | 106.9 | **0.469** | 48.9 | 20.51 | **1.40** |
-  | water | 108.7 | 0.391 | 211.6 | 13.44 | 0.92 |
+  | mid-sand | 100.0 | **0.460** | 65.5 | **23.69** | 1.10 |
+  | near-sand | 116.8 | **0.467** | 51.5 | **22.61** | **1.36** |
+  | water | 131.1 | 0.421 | 209.2 | **3.52** | **3.92** |
 
-  near/far HF ramp **1.40** (need ≥ 1.6) · crushed 0.08 · blown 0.00. Four failures: mid-sand HF over
-  the 22 confetti ceiling, near-sand MID/HF over 1.3 (blurry blobs), near-sand saturation over 0.46,
-  and the ramp. Clipping and shadow-hue coherence are the two things that do pass cleanly.
-
-## Phase 9: six attempts, six reverts
-Phase 9 replaced the single noisy total with a per-axis Pareto gate — accept only if **no axis drops
-and at least one gains ≥ 2**. It ran a coherent look pass (terrain + post + water + grid together,
-because the failures were coherence failures no single file could fix) and a units rebuild.
-
-| attempt | total | why it was rejected |
-|---|---|---|
-| look a1 | 48 | material 9 → 8 |
-| look a2 | 39 | lighting 18 → 12, readability 8 → 7, finish 5 → 3 |
-| look a3 | 47 | lighting 18 → 17, material 9 → 8, colour 6 → 5 |
-| units a1 | 44 | material 9 → 6, lighting 18 → 15 |
-| units a2 | **57** | units 3 → 6, lighting 18 → 20, finish 5 → 8 — but material 9 → 8 |
-| units a3 | 52 | units 3 → 6 — but readability 8 → 7 |
-
-Read that table before designing phase 10. **The gate reverted the best frame this project has ever
-rendered.** units a2 gained +8 total across three axes and lost one point of material; the rule as
-written threw it away. A strict "no axis may drop" gate on a judge whose per-axis noise is about ±1
-cannot ratchet — it rejects every real trade. Phase 10 should either allow a bounded trade
-(e.g. accept if Σ gains ≥ Σ losses + 2 and no axis drops by more than 1), score each attempt twice
-and compare means, or freeze the axes an attempt is not allowed to touch and only gate those.
+  near/far HF ramp **1.54** (need >= 1.6) - crushed 0.07 - blown 0.00. Seven failures: mid-sand and
+  near-sand HF over the 22 confetti ceiling, near-sand MID/HF over 1.3 (blurry blobs), near-sand
+  saturation over the 0.46 ceiling, water HF under the 7 floor and its MID/HF at 3.92 (a flat sheet
+  with no material at all), and the ramp. Clipping and shadow-hue coherence are the two things that
+  pass cleanly. The water box lands on open sea clear of the notification rail — check that before
+  trusting any number from it.
 
 ## Outstanding defects, in referee priority order
-1. **Units are not units at gameplay zoom.** Compare the three released frames: in `final-close.png`
-   the figures resolve into sword-and-shield soldiers, but in `final-hero.png` — the distance a player
-   actually plays at — an occupied tile is a strength badge and a contact ring over a mound, and
-   nothing about the silhouette names the unit. Lowest axis (3/15) and the one thing no Civ VI frame
-   lacks. Seven rebuilds have now been reverted; the silhouette work in `units a2` (commit `3263c7f`,
-   reverted in `194d198`) scored the best units axis yet and is the place to restart, not from zero.
-2. **Material is screen-space, not world-space.** Sand reads as blurry pale lozenges, grass as bright
-   confetti. On the released frame the near/far HF ramp is 1.40 against a ≥ 1.6 gate, mid-sand HF is
-   23.69 against a 22 ceiling, and near-sand MID/HF is 1.40 against a 1.3 ceiling — detail is being
-   drawn at pixel scale and blurred at blob scale at the same time. Needs one mipped world-space
-   detail set, not per-region noise.
-3. **Hex grid absent on mountain and rock** (crop `150,80,180,140`) — art-bible non-negotiable #1,
-   still broken after four dedicated passes. Terrain must leave value headroom, grid must adapt alpha
-   to the surface, post must crush neither.
-4. **River reads as a cyan cutout** around `700-840,250-360`: hard-edged, unlit, with a translucent
-   grey-blue slab quad over the tiles. Bed it into the terrain, light it, delete the slab.
-5. **Grass and shallows are acid.** Lit grass measures sat 0.475–0.55 and shallows 0.578 against the
-   bible's 0.30–0.42; near-sand measures 0.469 against the gate's 0.46 ceiling. The palette is
-   documented, it is just not being hit.
-6. **Shadowed rock is flat matte** (shadowed flank at `120,200` measures HF 3.77), plus a hard-edged
-   white snow decal and a black skirt gap near `115,70`.
+1. **Ground material is screen-space, not world-space** (material 8/20, the weakest axis). The
+   referee measured the near/far HF ramp at 1.34–1.59 across its own boxes against the 1.6
+   requirement, near sand and hills at HF 26–29 (confetti), and the far plain collapsed the other way
+   to HF 5 at MID/HF 2.13 (blurry nothing); the gate's standard boxes on the released frame give ramp
+   1.54 and near/mid sand HF 22.6/23.7. Both ends are the same bug: detail drawn at pixel scale
+   instead of at a fixed world size. One triplanar world-space detail set with honest mips fixes both
+   at once — per-region noise never will.
+2. **The hex grid vanishes across the mountain band** — roughly a third of the frame with no
+   clickable tile boundary. Art-bible non-negotiable #1, and still broken after five dedicated
+   passes. Terrain must leave value headroom, the grid must adapt alpha to the surface, post must
+   crush neither.
+3. **Mountains are intersecting flat shards.** Hard polygon seams, adjacent faces disagreeing about
+   the sun direction, paper-white snow caps and a milky near-white void at the summits. Light
+   describes no volume up there.
+4. **Land saturation runs hot against the locked palette.** Grass measures 0.45–0.55 against the
+   bible's 0.30–0.42, sand 0.42–0.47 against desert's 0.24–0.34, and open ocean sits at coast
+   brightness instead of #123A63. The palette is documented; it is simply not being hit.
+5. **Rivers read as hard-edged unlit cyan cutouts** with a translucent slab over the tiles. Bed the
+   channel into the terrain, light it, delete the slab.
+6. **Units still do not name themselves at gameplay zoom** (6/15, up from 3/15). In
+   `final-close.png` the figures resolve into sword-and-shield soldiers; in `final-hero.png` — the
+   distance a player actually plays at — an occupied tile is a strength badge and a contact ring
+   over a mound.
+
+## What is working — do not re-roll it
+One unifying warm key with the shadow hue within 1–3° of the lit hue; correct aerial perspective on
+land; the hex grid on grass, sand and plains; coast foam; the Aurelia keep silhouette; the HUD with
+zero clipping; crushed 0.07 / blown 0.00.
+
+## Phase 10: the gate loosened, and the best frame came back
+Phase 9's gate — accept only if **no axis drops and one gains ≥ 2** — had reverted the best frame
+the project ever rendered (units a2: +8 total across three axes, −1 material). Phase 10 replaced it
+with a bounded trade: **accept if the total gains ≥ 3 and no axis drops by more than 1**, judge
+noise being worth about a point.
+
+| pass | attempts | outcome |
+|---|---|---|
+| units (restore a2) | 1 | **accepted**, 49 → **57** — units 3 → 6, lighting 18 → 20, finish 5 → 8, material 9 → 8 |
+| mountains | 3 | all reverted (`c2178e0`) |
+| terrain/post material | 3 | all reverted (`f925287`) |
+| water | 3 | all reverted (`ea993fb`) |
+
+The loosened gate did exactly one thing and did it well: it let back in a change the strict rule had
+thrown away, worth +8. It then held against nine attempts on the three biggest defects, none of
+which cleared +3. Attempt frames are kept as `shots/p10-<pass>-a<n>.png` next to
+`shots/revert-check-<pass>.png`, so the next phase can see what has already been tried on mountains,
+material and water before trying it again.
 
 ## What was learned (do not re-litigate)
 - Parallel agents on shared visual files oscillate: phases 1-6 went 61 → 34 → 22. Sequential
-  single-owner passes with a git revert gate produced the only monotonic gain (34 → 50).
+  single-owner passes with a git revert gate produced the only monotonic gain (34 → 50 → 57).
 - One-sided metric targets get gamed: "HF_rms ≥ 12" was met by spraying per-pixel noise.
   `tools/metrics.mjs` now bounds detail on both sides and requires a near/far detail ramp.
-- A per-axis gate stops axes being traded away silently, but a *strict* one cannot ratchet against a
-  noisy judge — see the phase 9 table above.
+- A gate has to be able to ratchet. A strict per-axis "no axis may drop" rule against a judge whose
+  per-axis noise is about ±1 rejects every real trade — it cost this project its best frame for two
+  phases. Bounded trade (Σ ≥ +3, no single axis worse than −1) ratchets without letting an axis be
+  quietly sold off.
+- Three consecutive passes reverting nine of nine attempts is the gate working, not the gate stuck —
+  but it also says the remaining defects are not one-file fixes. Mountains, material and water each
+  failed alone; the ranked list above is coupled (grid legibility depends on terrain value headroom,
+  which depends on the grade).
 - The screenshot harness must wait on rendered-frame count, not wall-clock: at ~1 fps under
   software WebGL a timed wait captures an unconverged TAA frame, which produced dozens of
   bogus "near-field is blurry" critiques.

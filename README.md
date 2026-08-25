@@ -73,27 +73,50 @@ generated a long run of bogus "the near field is blurry" critiques before anyone
 The **game** is done: a full match plays start to finish, the 260-turn headless simulation passes
 every invariant, and `npx vite build` ships a static bundle.
 
-The **renderer** is not. A referee agent scores the frame against a real Civilization VI screenshot
-on six independent axes; the current frame stands at **49/100**:
+The **renderer** is closer than it was, and still not there. A referee agent scores the frame against
+a real Civilization VI screenshot on six independent axes; the current frame stands at **57/100**:
 
 | lighting | material | readability | units | colour | finish | total |
 |---|---|---|---|---|---|---|
-| 18/30 | 9/20 | 8/15 | **3/15** | 6/10 | 5/10 | **49/100** |
+| 20/30 | **8/20** | 9/15 | 6/15 | 6/10 | 8/10 | **57/100** |
 
-Honestly stated: blind judging still picks the real Civ VI immediately. Units are the worst of it —
-close up they resolve into soldiers, but at the distance you actually play at an occupied tile is a
-strength badge and a contact ring over a mound, and the silhouette names nothing. Ground material is screen-space rather than world-space, so detail does not shrink with
-distance. The hex grid still vanishes on mountain tiles, which breaks the art bible's first
-non-negotiable. Rivers read as flat cyan cutouts. The objective gate agrees: `tools/metrics.mjs` on
-the shipped frame still fails, with the near/far detail ramp at 1.40 against a 1.6 target. All six
-defects are written up in priority order, with the measurements behind them, in `docs/RESUME.md`.
+What holds up: one unifying warm key with the shadow hue within a couple of degrees of the lit hue,
+correct aerial perspective on land, the hex grid on grass, sand and plains, coast foam, the keep
+silhouette, a HUD with no clipping anywhere, and clean ends of the histogram — 0.07 of the frame
+crushed, none of it blown.
 
-Nine phases in, the whole-frame score went 61 → 34 → 22 under parallel agents, then climbed to 50
-under sequential single-owner passes with a revert gate; the six-axis rubric above re-scored that same
-frame at 49, and the latest phase then reverted all six of its attempts. The most useful thing in this
-repo may be that record: `docs/RESUME.md` documents which gate designs ratcheted and which stalled —
-including one so strict it threw away the best frame the project ever rendered over a single point on
-a single axis.
+What does not, in the referee's priority order:
+
+1. **Ground material is screen-space, not world-space.** The near/far detail ramp measures 1.54
+   against a 1.6 requirement, near and mid sand run HF 22.6 and 23.7 against a 22 confetti ceiling,
+   and the referee finds the far plain collapsed the other way, to HF 5 at MID/HF 2.13 — blurry
+   nothing. Both ends are one bug: detail drawn at pixel scale instead of at a fixed world size.
+   Weakest axis at 8/20.
+2. **The hex grid vanishes across the mountain band** — about a third of the frame with no clickable
+   tile boundary, in a game played by clicking tiles. Art-bible non-negotiable #1.
+3. **Mountains are intersecting flat shards.** Hard polygon seams, adjacent faces disagreeing about
+   where the sun is, paper-white snow caps and a milky near-white void where the summits should have
+   volume.
+4. **Land saturation runs hot against the locked palette** — grass measures 0.45–0.55 against a
+   0.30–0.42 spec, sand 0.42–0.47 against desert's 0.24–0.34 — and open ocean sits at coast
+   brightness instead of the specified `#123A63`.
+5. **Rivers read as hard-edged unlit cyan cutouts**, with a translucent slab laid over the tiles
+   instead of a channel cut into them.
+6. **Units still do not name themselves at gameplay zoom** (6/15, up from 3/15). Close up they
+   resolve into sword-and-shield soldiers; at the distance the hero frame is played at, an occupied
+   tile is a strength badge and a contact ring over a mound.
+
+Blind judging still picks the real Civ VI immediately, and the objective gate agrees:
+`tools/metrics.mjs` on the shipped `shots/final-hero.png` reports **FAIL** on seven counts. All of it
+is written up with the measurements behind it, in priority order, in `docs/RESUME.md`.
+
+Ten phases in, the whole-frame score went 61 → 34 → 22 under parallel agents, then climbed to 50
+under sequential single-owner passes with a revert gate, and to 57 once that gate stopped rejecting
+every trade. The most useful thing in this repo may be that record: `docs/RESUME.md` documents which
+gate designs ratcheted and which stalled — including one so strict it discarded the best frame the
+project had ever rendered over a single point on a single axis, and the looser rule that had to put
+it back. The three passes since have reverted nine attempts out of nine: the remaining defects are
+coupled, and none of them is a one-file fix.
 
 Contributions welcome — `docs/ART-BIBLE.md` (the locked direction) and `tools/metrics.mjs` (the
 objective gate) are the two things to read first.
