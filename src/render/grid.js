@@ -560,15 +560,15 @@ export class Grid {
       const lift = 0.04 + relief * 0.02 + (rough ? 0.05 : 0);
 
       // THE ROCK STANDS ON THE TILE THE LATTICE IS ENGRAVED INTO, and a decal cannot win that
-      // fight. terrain.js scatters summit lofts and scree over a mountain hex rim to rim; they
-      // are opaque geometry a metre thick, so the ground stroke under them is depth-rejected by
-      // a solid mass. The 1.25 u view-space bias that used to be here did not recover the
-      // lattice — it punched the decal THROUGH the rock, which is the stray grey rods that were
-      // lying across the massif at angles no hex edge has. terrain.js's rock material now draws
-      // its own half of the same world-space lattice (same axial transform, same hexagon
-      // distance, same ink), so the line is continuous from field to summit and this bias goes
-      // back to zero: the ground decal is engraved in the ground, and rock occludes it, which
-      // is what "an engraving, not an overlay" has meant everywhere else on the board.
+      // fight. terrain.js scatters summit lofts and scree over a mountain hex; they are opaque
+      // geometry metres thick, so the ground stroke under them is depth-rejected by a solid
+      // mass. The 1.25 u view-space bias that used to be here did not recover the lattice — it
+      // punched the decal THROUGH the rock, which is the stray grey rods lying across the
+      // massif at angles no hex edge has. terrain.js's rock material now draws its own half of
+      // the same world-space lattice (same axial transform, same hexagon distance, same stroke
+      // profile), so the line is continuous from field to summit and the bias goes back to
+      // zero: the ground decal is engraved in the ground, and rock occludes it, which is what
+      // "an engraving, not an overlay" has meant everywhere else on the board.
 
       const key = ((t.q / CH_Q) | 0) * 64 + ((t.r / CH_R) | 0);
       let ch = chunks.get(key);
