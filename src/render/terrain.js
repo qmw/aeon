@@ -548,6 +548,16 @@ function peakGeometry(v) {
   const apex = pos.length / 3;
   pos.push(lean, 1.0, lean * 0.6); col.push(0.76, 0.75, 0.73);
   const rows = [];
+  // MONOTONIC RINGS. The radius jitter is interpolated across 11 radial bands over 15 rings, so
+  // between two rings a column's jitter can swing the full 0.32 range while rr itself grows only
+  // 6.75% — the ring CROSSES the one inside it, that quad turns inside out, and its two triangles
+  // shade away from the sun. That inverted quad, seen against the loft behind it, is the pair of
+  // hard dark triangles meeting in a V that this massif has been rejected for three times running:
+  // it is not the hex field punching through (hiding the field leaves them untouched) and it is
+  // not the shadow map (killing castShadow leaves them untouched). Forcing each column's radius
+  // to grow and its height to fall keeps the surface single-valued, and the silhouette is
+  // unchanged wherever the jitter was already well behaved — which is most of the mesh.
+  const prevR = new Float32Array(ANG), prevH = new Float32Array(ANG).fill(2);
   let maxR = 0;   // MEAN rim radius: normalising by it makes the instance scale the world radius
   for (let j = 0; j < RINGS; j++) {
     const rr = 0.055 + (j / (RIM - 1)) * 0.945;
@@ -591,7 +601,7 @@ function peakGeometry(v) {
       // the notches. Tapered out toward the rim, the foot comes back round and fills the hex
       // while the crest keeps every arete and gully it had.
       const sps = sp * (0.42 + 0.58 * (1 - rc));
-      const rad = rr * (0.72 + 0.48 * sps) * n1 * (1 + 0.075 * Math.cos((1 - rc) * 15.7 + v * 1.9));
+      let rad = rr * (0.72 + 0.48 * sps) * n1 * (1 + 0.075 * Math.cos((1 - rc) * 15.7 + v * 1.9));
       // Straight along an arete, concave down a gully: the exponent difference IS the peak.
       // (Under 1.0 the profile inverts — blunt apex, cliff rim — and a hex of that is a bread
       // roll, which is what a tray of them read as.)
@@ -606,8 +616,10 @@ function peakGeometry(v) {
       // silhouette above the rim is unchanged. Past the rim the two flare rings keep going,
       // out and down, so the foot buries itself in the field instead of lying on it.
       const ex = 1.02 + 0.86 * (1 - sp), FT = 0.08, f0 = Math.pow(FT, ex);
-      const h = (Math.pow(Math.max(0, 1 - rr + FT), ex) - f0) / (Math.pow(1 + FT, ex) - f0) * n2
+      let h = (Math.pow(Math.max(0, 1 - rr + FT), ex) - f0) / (Math.pow(1 + FT, ex) - f0) * n2
               - Math.max(0, rr - 1) * 1.10;   // and the flare digs in, on any profile
+      if (j > 0) { rad = Math.max(rad, prevR[i] * 1.02); h = Math.min(h, prevH[i] - 0.005); }
+      prevR[i] = rad; prevH[i] = h;
       if (j === RIM - 1) maxR += rad / ANG;
       row.push(pos.length / 3);
       pos.push(Math.cos(a) * rad + lean * (1 - rc), h, Math.sin(a) * rad + lean * 0.6 * (1 - rc));
@@ -1869,6 +1881,11 @@ export class Terrain {
         const hgt = Math.min(3.4, (0.85 + 1.85 * h2 * h2) * (0.58 + 0.88 * alt)
           * (0.72 + 0.60 * prom) * swell) + Math.min(1.1, rise) * 0.80 + 0.50;
         // yaw is negated: a +Y rotation carries local +X to (cos, 0, -sin)
+        // The dark V-notches in the massif are NOT the loft grazing the field: lifting this
+        // seat by a third of the corner spread, and then by three quarters of it, moved neither
+        // their position nor their size. They are pairs of CLIFF WALL faces meeting at a hex
+        // corner — two vertical quads that both face away from a low sun — and the fill below
+        // is what stops them reading as holes punched in the rock.
         ridges.push(p.x + (h1 - 0.5) * 0.12, foot - 0.55, p.z + (h3 - 0.5) * 0.12,
           rad * stretch, hgt, rad / stretch,
           -theta + (h3 - 0.5) * 0.7, (h1 - 0.5) * 0.10, h2, i);
@@ -2359,11 +2376,17 @@ export class Terrain {
           // The two blob bands are cut by half and the fine one raised: 8-25 px normal energy
           // is what MID_rms is a band-pass on, and a massif carrying all of its relief there
           // measures as structureless blur however much of it there is.
+          // AMPLITUDE. This is the term that decides whether light describes the MASS or the
+          // grain. Summed at full swing the old bands tilted the normal up to 58 degrees, which
+          // is more than the difference between a summit's lit flank and its shaded one: every
+          // face then wears the same stipple, no two adjacent faces agree about the sun, and the
+          // range reads as crumpled cloth instead of rock. Halved, the loft's own shape carries
+          // the light and the grain sits on top of it where grain belongs.
           vec2 rg = ( rk2.rg - 0.5 ) * 0.72 + ( rk3.rg - 0.5 ) * 0.58 * rNear + ( rk1.rg - 0.5 ) * 0.40
-                  + ( rk4.rg - 0.5 ) * 1.40 * rFin;
+                  + ( rk4.rg - 0.5 ) * 1.25 * rFin;
           vec3 rUp = mix( vec3( 0.0, 1.0, 0.0 ), vec3( 0.0, 0.0, 1.0 ), step( 0.80, abs( rwn.y ) ) );
           vec3 rTg = normalize( cross( rUp, rwn ) + vec3( 1e-5, 0.0, 0.0 ) );
-          vec3 rN = normalize( rwn + ( rTg * rg.x + cross( rwn, rTg ) * rg.y ) * 1.05 );
+          vec3 rN = normalize( rwn + ( rTg * rg.x + cross( rwn, rTg ) * rg.y ) * 0.80 );
 
           // Bedding is a function of world Y alone, so gate it on the world-Y footprint of a
           // pixel and not on the 3D one: on a cut face the 3D footprint runs down the fall line
@@ -2423,7 +2446,7 @@ export class Terrain {
           // blocks and 145 px slabs are the scales a far massif can still resolve, and they
           // cost ~0.01 HF each. Without them the ramps between the summits are untextured plate.
           rock *= 0.930 + 0.140 * smoothstep( 0.22, 0.80, rk2.a );        // 30 px block scatter
-          rock *= 0.930 + 0.140 * smoothstep( 0.24, 0.76, rk1.a );        // 145 px slabs
+          rock *= 0.905 + 0.190 * smoothstep( 0.24, 0.76, rk1.a );        // 145 px slabs
           rock *= 1.0 - smoothstep( 0.18, 0.02, rk2.a ) * 0.24;           // slab joints
           rock *= mix( 1.0, 0.955 + 0.09 * smoothstep( 0.24, 0.76, rk3.a ), rNear );  // 10 px grain
           rock *= 1.0 - smoothstep( 0.30, 0.07, rk3.a ) * 0.13 * mix( 0.5, 1.0, rNear );  // joints, 10 px
@@ -2457,15 +2480,27 @@ export class Terrain {
           // Snow now carries the same two COARSE world-space bands as the rock under it, plus
           // the bedding it lies in, so it holds shape at every distance; all three multipliers
           // average 1.0 and the top end comes down 4% off the tonemap shoulder.
-          vec3 snowC = mix( vec3( 0.640, 0.672, 0.726 ), vec3( 0.772, 0.784, 0.816 ), rk2.a * 0.6 + rk3.a * 0.4 );
-          snowC *= 0.944 + 0.112 * smoothstep( 0.24, 0.76, rk1.a );      // 145 px drifts
-          snowC *= 0.958 + 0.084 * smoothstep( 0.22, 0.80, rk2.a );      //  30 px sastrugi
-          snowC *= 0.940 + 0.120 * band;                                 // it lies in the bedding
+          // ...and it was STILL a blown void, measured RGB 226,221,208 at HF 6.8 over the whole
+          // cap: 0.70 albedo plus a 0.11 specular under this key is 2.5 in the HDR buffer, so
+          // every band below was being flattened by the tonemap exactly as before. Snow is the
+          // brightest thing in the frame whatever its albedo; what decides whether it reads as
+          // snow or as a hole is how much of its own texture survives the curve. 0.60x on the
+          // pair with the spread widened 1.21 -> 1.48, and all four modulations deepened.
+          vec3 snowC = mix( vec3( 0.384, 0.403, 0.436 ), vec3( 0.566, 0.575, 0.599 ), rk2.a * 0.6 + rk3.a * 0.4 );
+          snowC *= 0.918 + 0.164 * smoothstep( 0.24, 0.76, rk1.a );      // 145 px drifts
+          snowC *= 0.940 + 0.120 * smoothstep( 0.22, 0.80, rk2.a );      //  30 px sastrugi
+          snowC *= 0.906 + 0.188 * band;                                 // it lies in the bedding
           snowC *= ( 0.94 + 0.11 * rk1.b ) * mix( 1.0, 0.935 + 0.13 * rk4.a, rFin );   // crust, 3.4 px
           // snow replaces the instance tint instead of being multiplied by it, or a dark
           // boulder ends up with grey snow on top
-          diffuseColor.rgb = mix( diffuseColor.rgb * rock * 2.85, snowC, snowAmt );
-          float rspec = ( 0.055 + 0.11 * snowAmt ) * ( 0.45 + 1.1 * rk4.a );  // sparkle, not gloss`)
+          // EXPOSURE. 2.85 put the product's top end past 2.0 in the HDR buffer, where the ACES
+          // curve has no slope left, so every albedo band above was flattened into one value on
+          // the way out: the pale tan plate the lit flanks read as. A UNIFORM gain cut is the
+          // only correction that does not cost material — the bands are multiplicative, so
+          // their ratios survive a scale exactly while the whole surface slides back down onto
+          // the part of the curve that can still resolve them. Hue and chroma unmoved.
+          diffuseColor.rgb = mix( diffuseColor.rgb * rock * 2.40, snowC, snowAmt );
+          float rspec = ( 0.055 + 0.042 * snowAmt ) * ( 0.45 + 1.1 * rk4.a );  // sparkle, not gloss`)
         .replace('#include <normal_fragment_maps>', 'normal = normalize( mat3( viewMatrix ) * rN );')
         .replace('#include <specularmap_fragment>', 'float specularStrength = rspec;')
         .replace('#include <lights_fragment_end>', /* glsl */`#include <lights_fragment_end>
