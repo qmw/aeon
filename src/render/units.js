@@ -92,7 +92,12 @@ const M_SCALE = [0.20, 0.40, 0, 11];   // scale/lamellar armour
 // and the ground is dark: every helmet in the roster was arriving on screen as a brown lump
 // with one specular pip. Half-metal keeps a diffuse term, so a bronze helm is the BRIGHTEST
 // thing on the figure from above — which is where the eye lands first.
-const M_HELM = [0.24, 0.32, 0, 2];
+// ROUGHNESS 0.32 OVERSHOT. Measured on the shipped frame, the warrior's dome came back at
+// 236/226/210 — value 0.89 against an accent band authored at 0.65, i.e. a blown white disc,
+// which is half of the review's "pale mushroom". The sheen term goes as pow(1 - roughness,
+// 1.6), so 0.62 takes 55% off the sky lobe: a burnished helm rather than a mirrored one, and
+// it still carries a lobe where the shield boss and the blade carry theirs.
+const M_HELM = [0.32, 0.62, 0, 2];
 
 // CONTACT OCCLUSION, and it is a MULTIPLY, not a painted colour. The last pass tinted a warm
 // ochre pool and alpha-blended it over the sand, which is why the review called it a
@@ -603,7 +608,7 @@ const torso = (c = 'A') => [
 // a small dark face under it. The brow and nose sit under the board's LOD cut on purpose: free
 // at gameplay zoom, and the portrait is the only place they are ever seen.
 const head = (skin = C.skin) => [
-  P('sph', 2, skin, M_SKIN, 0, 0.000, 0.020, 0.136, 0.152, 0.138),
+  P('sph', 2, skin, M_SKIN, 0, -0.004, 0.018, 0.124, 0.142, 0.128),
   D(P('sph', 2, C.hair, M_CLOTH, 0, -0.050, 0.046, 0.112, 0.056, 0.096)),   // jaw + beard
   D(P('box', 2, 0x2b2018, M_LEATH, 0, 0.020, 0.080, 0.076, 0.018, 0.020)),  // brow (portrait)
   P('sph', 2, skin, M_SKIN, 0, -0.014, 0.100, 0.046, 0.040, 0.034),         // nose (portrait)
@@ -622,6 +627,10 @@ const arms = (sleeve = C.cloak) => [
 // carrying the metal accent all the way round the outline, and one SMALL boss (the old one was
 // a third of the board — a pale ellipse in the middle of a dark disc, i.e. a pan). Turned off
 // the frontal plane so it reads as a disc in perspective rather than a plate facing the lens.
+// SIZED TO THE TORSO AND OVERLAPPING IT. At 1.90r the board measured wider than the man
+// carrying it and sat in clear air off his hip — a brown dinner plate parked next to a
+// soldier. The face is now the torso's own width and the disc is pushed inboard far enough
+// that its near edge crosses the tabard, so there is no gap for the eye to read as detached.
 const shield = (bone, x, y, z, r) => {
   const rx = -0.12, ry = -0.36, rz = 0.14;
   // the board's own normal, so the boss sits ON the face instead of beside it
@@ -632,18 +641,27 @@ const shield = (bone, x, y, z, r) => {
     P('sph', bone, C.kit, M_MET, x + n.x, y + n.y, z + n.z, r * 0.44, r * 0.44, r * 0.40, rx, ry, rz),
   ];
 };
-// ---- sword: a hard bright diagonal leaving the shoulder above helm height, laid out along its
-// own axis so grip, guard and point are on one line by construction — and a FIST closed on the
-// grip, because a blade growing straight out of a sleeve is the review's "no visible grip".
-const sword = (bone, rz = 0.52, len = 0.44) => {
-  const dx = -Math.sin(rz), dy = Math.cos(rz), hx = -0.062, hy = -0.238, hz = 0.026;
+// ---- sword: a hard bright diagonal off the shoulder, laid out along its own axis so grip,
+// guard and point are on one line by construction — and a FIST closed on the grip, because a
+// blade growing straight out of a sleeve is the review's "no visible grip".
+//
+// THE FLOATING BLADE WAS A LENGTH AND A SECTION PROBLEM, not a rigging one. The hilt already
+// sits at the end of the sleeve; what read as detached was 0.44 of blade — half the figure's
+// height — swung 30 degrees out into open ground on a section 0.023 thick. At 2.3 screen px
+// of inverted hull per side, a 5 px bar is mostly contour, which is the "ghosted translucent
+// streak" the review measured; and the far end of it lands where nothing else on the man is,
+// so the eye files it as its own object. Shorter, steeper and with a solid section: the blade
+// now rises alongside the pauldron and tops out at helmet height instead of leaving the
+// figure, and every part of it is over or touching the shoulder mass it comes from.
+const sword = (bone, rz = 0.34, len = 0.30) => {
+  const dx = -Math.sin(rz), dy = Math.cos(rz), hx = -0.058, hy = -0.232, hz = 0.030;
   const p = (g, c, mr, t, sx, sy, sz) =>
     P(g, bone, c, mr, hx + dx * t, hy + dy * t, hz, sx, sy, sz, 0, 0, rz);
   return [
-    p('sph', C.skin, M_SKIN, -0.010, 0.086, 0.082, 0.086),                       // hand on the hilt
-    p('box', C.kit, M_MET, 0.064, 0.150, 0.030, 0.046),                          // crossguard
-    p('box', 0x6a7278, [0.42, 0.52, 0, 2], 0.064 + len * 0.5, 0.044, len, 0.023),
-    p('cone', 0x7a838a, [0.42, 0.52, 0, 2], 0.064 + len + 0.058, 0.044, 0.116, 0.023),
+    p('sph', C.skin, M_SKIN, -0.006, 0.098, 0.090, 0.098),                       // fist on the hilt
+    p('box', C.kit, M_MET, 0.070, 0.158, 0.034, 0.054),                          // crossguard
+    p('box', 0x6a7278, [0.42, 0.52, 0, 2], 0.070 + len * 0.5, 0.052, len, 0.034),
+    p('cone', 0x7a838a, [0.42, 0.52, 0, 2], 0.070 + len + 0.052, 0.052, 0.104, 0.034),
   ];
 };
 
@@ -660,17 +678,23 @@ const DEFS = {
     foot: 0.24, h: 0.88, piv: HP, gait: 1,
     parts: [
       ...legs(), ...torso(), ...head(), ...arms(),
-      // HELM OVER SKULL, then a hard dark line under it. The dome is wider than the cranium
-      // and the browband is wider again, so the head silhouette is bronze-cap / dark-band /
-      // dark-jaw from the top down and there is no bald ovoid left to read.
-      P('sph', 2, C.kit, M_HELM, 0, 0.062, -0.008, 0.170, 0.122, 0.168),             // helm dome
-      D(P('cyl', 2, C.leatherD, M_LEATH, 0, 0.010, 0.006, 0.204, 0.042, 0.188)),     // brim
+      // HELM OVER SKULL, then a hard dark line under it — but the shipped version was a
+      // BRIGHT DISC UNDER A WIDER DARK DISC, which is a mushroom in plan, and plan is the
+      // only view this camera has of a head. Measured part by part, the pale cap was not even
+      // the bronze: the dome sat behind the skull and covered its top half, so most of what
+      // filled the crown was bare cranium. The dome is now oval (narrow across, long
+      // fore-and-aft) and centred over the skull, the brim tucks INSIDE its outline on both
+      // axes so nothing overhangs, and the comb overruns the dome at both ends. Head
+      // silhouette: a crested lens, not a circle.
+      P('sph', 2, C.kit, M_HELM, 0, 0.056, 0.000, 0.152, 0.150, 0.186),              // helm dome
+      D(P('cyl', 2, C.leatherD, M_LEATH, 0, -0.012, 0.004, 0.148, 0.048, 0.178)),    // brim
       // CREST, and it runs FORE-AFT. A transverse fin sits behind the head at this camera and
       // reads as a crate bolted to the helmet; a comb along the crown is a dark stripe straight
       // down the middle of the dome, which is the one mark that turns a pale ovoid into a
-      // helmet from above. Dark, because a bright one fights the helm for the accent band.
-      D(P('sph', 2, 0x33281a, M_LEATH, 0, 0.098, -0.008, 0.058, 0.134, 0.220)),
-      ...shield(3, 0.098, -0.118, 0.152, 0.156),
+      // helmet from above. Dark, because a bright one fights the helm for the accent band, and
+      // longer than the dome so it breaks the outline instead of sitting inside it.
+      D(P('sph', 2, 0x33281a, M_LEATH, 0, 0.098, 0.004, 0.046, 0.150, 0.262)),
+      ...shield(3, 0.062, -0.092, 0.128, 0.140),
       ...sword(4),
     ],
     flags: [],
@@ -682,7 +706,7 @@ const DEFS = {
       ...legs(), ...torso(), ...head(), ...arms(C.wool),
       P('cone', 2, C.steel, M_HELM, 0, 0.104, 0, 0.190, 0.204, 0.190),               // conical helm
       D(P('cyl', 2, C.leatherD, M_LEATH, 0, 0.012, 0.004, 0.196, 0.036, 0.180)),     // brim
-      ...shield(3, 0.100, -0.116, 0.156, 0.166),
+      ...shield(3, 0.064, -0.090, 0.130, 0.148),
       D(P('cyl', 4, C.woodD, M_WOOD, -0.055, 0.190, 0.050, 0.036, 0.98, 0.036, 0, 0, -0.08)),
       P('cone', 4, C.steel, M_MET, -0.100, 0.745, 0.050, 0.072, 0.26, 0.072, 0, 0, -0.08),
     ],
@@ -2891,7 +2915,15 @@ export class Units {
         // the accent, the legs and boots own the floor, everything else is the mass — and the
         // head gets half a band of lift on top so the silhouette always has a light top.
         const lo = p.b === 5 || p.b === 6 || p.lo;
-        const cen = (met ? 0.615 : lo ? 0.11 : 0.375) + (p.b === 2 && !met ? 0.020 : 0) + gnd * 0.20;
+        const helm = met && p.b === 2;
+        // SKIN IS NOT AN ACCENT. Measured per part (tools/_upart.mjs), a bare cranium came out
+        // of this ladder at 0.73 sRGB — paler than the bronze helmet sitting on it, so the two
+        // merged into one light oval and the head read as a mushroom cap however the helm was
+        // shaped. Under a golden-hour key a face is a MID tone that sits below the metal, and
+        // the only skin left in a silhouette at this size is a jaw under a brim and a fist on
+        // a hilt; both want to be darker than the thing they are holding up.
+        const cen = (met ? 0.615 : z === 1 ? 0.295 : lo ? 0.11 : 0.375)
+                  + (p.b === 2 && !met ? 0.020 : 0) + gnd * 0.20;
         // Metal gets a NARROW band, not a big one: it is already the brightest thing in the
         // frame once the spec lobe is on it, and stretching pale steel the same way as wool put
         // a blown-white pickaxe head in the middle of the board.
@@ -2903,6 +2935,15 @@ export class Units {
         // the polished-metal ceiling, so the hierarchy is bronze > cloth > wool > boots.
         const cap = met ? 0.84 : lo ? 0.26 : 0.60;
         _c.setHSL(_hsl.h, _hsl.s, THREE.MathUtils.clamp(l, 0.05, cap), THREE.SRGBColorSpace);
+        // A HELMET IS THE ONE METAL ON THIS CAST THAT FACES STRAIGHT UP, so it collects the
+        // sun, the sky lobe and the up-facing fill at once: authored at the same 0.615 as a
+        // sword blade, the warrior's dome MEASURED 236/226/210 on the shipped frame — value
+        // 0.89 against an accent band written at 0.65, the brightest object in its quadrant,
+        // and the review's "pale mushroom disc". Dropping the albedo (and with it the metal's
+        // specular tint, which is the same colour) is the only knob that moves it: pulling the
+        // AUTHORED lightness does almost nothing, because HSL lightness near 0.5 is where a
+        // saturated hue peaks and the red channel simply refuses to come down.
+        if (helm) _c.multiplyScalar(0.46);
         pr.mesh.setColorAt(s, _c);
         // roughness rides the same lot: a scuffed helmet and a polished one in the same file
         pr.amr.setXYZW(s, p.mr[0], THREE.MathUtils.clamp(p.mr[1] + dye * 0.10, 0.10, 1), p.mr[2], p.mr[3] || 0);
