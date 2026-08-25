@@ -82,6 +82,7 @@ const VERT = /* glsl */`
 attribute vec2 aLocal;    // position on the IDEAL hex, corner radius = 1
 attribute vec2 aTile;     // uv into the state texture
 attribute float aFade;    // baked per-tile legibility; negative marks a water tile
+attribute float aBias;    // EXTRA depth bias, for tiles with rock standing on them (see below)
 uniform sampler2D uState;
 uniform float uFar, uBias;
 varying vec2 vL; varying vec4 vS; varying vec3 vP; varying vec2 vT;
@@ -105,7 +106,7 @@ void main() {
   float grazeK = smoothstep(0.05, 0.22, toCam.y / dist);
   vFade = min(abs(aFade), min(distK, grazeK));
   vec4 mv = viewMatrix * wp;
-  mv.xyz -= normalize(mv.xyz) * uBias;   // pure depth bias along the eye ray: zero screen motion
+  mv.xyz -= normalize(mv.xyz) * (uBias + aBias);   // pure depth bias along the eye ray: zero screen motion
   gl_Position = projectionMatrix * mv;
 }`;
 
@@ -559,23 +560,22 @@ export class Grid {
       // clearance over terrain.js's fbm relief, which is damped to ~0.2*amp at the rim
       const lift = 0.04 + relief * 0.02 + (rough ? 0.05 : 0);
 
-      // THE ROCK STANDS ON THE TILE THE LATTICE IS ENGRAVED INTO, and a decal cannot win that
-      // fight. terrain.js scatters summit lofts and scree over a mountain hex; they are opaque
-      // geometry metres thick, so the ground stroke under them is depth-rejected by a solid
-      // mass. The 1.25 u view-space bias that used to be here did not recover the lattice — it
-      // punched the decal THROUGH the rock, which is the stray grey rods lying across the
-      // massif at angles no hex edge has. terrain.js's rock material now draws its own half of
-      // the same world-space lattice (same axial transform, same hexagon distance, same stroke
-      // profile), so the line is continuous from field to summit and the bias goes back to
-      // zero: the ground decal is engraved in the ground, and rock occludes it, which is what
-      // "an engraving, not an overlay" has meant everywhere else on the board.
+      // THE ROCK STANDS ON THE TILE THE LATTICE IS ENGRAVED INTO. terrain.js scatters its summit
+      // lofts and scree over a mountain hex rim to rim, and they are real geometry with real
+      // depth: measured (tools/_bgrid3.mjs) 53% of every visible mountain rim is occluded by
+      // them, median depth gap 1.14 u, p75 1.35. The 0.11 view-space bias below is sized to be
+      // beaten by anything a player can see standing on a hex — correct on grass, hopeless
+      // against a boulder field — so the massif came back with a broken stipple where its grid
+      // should be, which is standing reject #1 and a whole biome the player cannot count.
+      // A rough tile gets a bias sized to the props that stand on it instead.
+      const bias = rough ? 1.25 : 0;
 
       const key = ((t.q / CH_Q) | 0) * 64 + ((t.r / CH_R) | 0);
       let ch = chunks.get(key);
-      if (!ch) chunks.set(key, ch = { pos: [], loc: [], uv: [], fd: [], idx: [] });
+      if (!ch) chunks.set(key, ch = { pos: [], loc: [], uv: [], fd: [], bs: [], idx: [] });
       const b = ch.pos.length / 3;
       const uvx = (t.q + 0.5) / map.w, uvy = (t.r + 0.5) / map.h, fsign = water ? -fade : fade;
-      const put = (x, y, z, lx, lz) => { ch.pos.push(x, y, z); ch.loc.push(lx, lz); ch.uv.push(uvx, uvy); ch.fd.push(fsign); };
+      const put = (x, y, z, lx, lz) => { ch.pos.push(x, y, z); ch.loc.push(lx, lz); ch.uv.push(uvx, uvy); ch.fd.push(fsign); ch.bs.push(bias); };
 
       put(p.x, this.surfY(p.x, p.z) + lift, p.z, 0, 0);
       for (const R of RINGS) for (let k = 0; k < NR; k++) {
@@ -598,6 +598,7 @@ export class Grid {
       g.setAttribute('aLocal', new THREE.BufferAttribute(new Float32Array(ch.loc), 2));
       g.setAttribute('aTile', new THREE.BufferAttribute(new Float32Array(ch.uv), 2));
       g.setAttribute('aFade', new THREE.BufferAttribute(new Float32Array(ch.fd), 1));
+      g.setAttribute('aBias', new THREE.BufferAttribute(new Float32Array(ch.bs), 1));
       g.setIndex(new THREE.BufferAttribute(new Uint16Array(ch.idx), 1));
       g.computeBoundingSphere();
       const m = new THREE.Mesh(g, this.mat); m.renderOrder = 12;
