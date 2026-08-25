@@ -555,7 +555,7 @@ const P = (g, b, c, mr, x, y, z, sx, sy, sz, rx, ry, rz) =>
 // on purpose: the board camera looks DOWN at 55 degrees, so a limb tucked inside the torso's
 // own plan outline is a limb that does not exist. Stance width is what puts arms and legs back
 // into the silhouette, and "no arms or legs" was the review's first sentence about this cast.
-const HP = [[0, 0, 0], [0, 0.44, 0], [0, 0.694, 0], [0.136, 0.588, 0.010], [-0.136, 0.588, 0.010], [0.106, 0.385, 0.026], [-0.106, 0.385, -0.026], [0, 0, 0]];
+const HP = [[0, 0, 0], [0, 0.44, 0], [0, 0.665, 0], [0.136, 0.588, 0.010], [-0.136, 0.588, 0.010], [0.098, 0.385, 0.026], [-0.098, 0.385, -0.026], [0, 0, 0]];
 
 // ------------------------------------------------------------ SILHOUETTE KIT
 // MEASURED, then authored to it. At the shipped framing one unit-space unit projects to ~60 px
@@ -581,16 +581,12 @@ const D = (p) => (p.lo = 1, p);
 // ---- mass 1: the lower body. Two tapered legs a stance apart, each ending in a BOOT that is
 // wider and deeper than the leg. From above the boots are the only part of the lower body that
 // clears the torso's outline, so without them a soldier has no feet — which is exactly how the
-// last pass read. They are also what puts two dark anchors on the contact shadow. ROUNDED, not
-// boxed: a box's flat top faces straight up, catches the whole sky dome and comes out a pale
-// blue-grey slab, which is why the review read this cast's lower body as "a crate or a plinth".
+// last pass read. They are also what puts two dark anchors on the contact shadow.
 const legs = (col = 0x3b3024) => [
-  P('limb', 5, col, M_CLOTH, 0, -0.148, 0.004, 0.094, 0.208, 0.106),
-  P('limb', 6, col, M_CLOTH, 0, -0.148, 0.004, 0.094, 0.208, 0.106),
-  // scuffed, not polished: at 0.58 roughness a dark sphere catches one blown speck of sun and
-  // the review called it "a hard white dot rather than a shaped highlight". Boot leather is dull.
-  P('sph', 5, 0x2a2018, [0, 0.80, 0, 6], 0.020, -0.334, 0.026, 0.106, 0.070, 0.184),
-  P('sph', 6, 0x2a2018, [0, 0.80, 0, 6], -0.020, -0.334, 0.026, 0.106, 0.070, 0.184),
+  P('limb', 5, col, M_CLOTH, 0, -0.148, 0.004, 0.100, 0.208, 0.108),
+  P('limb', 6, col, M_CLOTH, 0, -0.148, 0.004, 0.100, 0.208, 0.108),
+  P('box', 5, 0x2a2018, M_LEATH, 0, -0.336, 0.030, 0.116, 0.058, 0.180),
+  P('box', 6, 0x2a2018, M_LEATH, 0, -0.336, 0.030, 0.116, 0.058, 0.180),
 ];
 // ---- mass 2: the torso, and it is the ONLY place the civ colour lands on a foot unit. TALLER
 // than it is wide now: the old one was 0.30 across by 0.26 high, i.e. a lozenge, and a lozenge
@@ -599,30 +595,18 @@ const legs = (col = 0x3b3024) => [
 const torso = (c = 'A') => [
   P('caps', 1, c, M_CLOTH, 0, 0.080, 0, 0.268, 0.150, 0.186),
   D(P('cyl', 1, C.leatherD, M_LEATH, 0, -0.082, 0, 0.272, 0.046, 0.192)),
-  // GORGET. The head used to be sunk into the chest dome to its own eye line, so the helmet
-  // sat straight on the shoulders with no face and no neck between them — "a helmet sitting on
-  // nothing". The head bone lifts (see HP) and this dark collar, proud of the chest the way the
-  // belt is proud of the waist, closes the gap it opens: from above it is the ring that
-  // separates a bright helm from a livery tabard, and it is why the figure has a neck at all.
-  // Flattened SPHERE, not a disc: a cylinder's flat top faces the key and reads as a plank.
-  D(P('sph', 1, C.leatherD, M_LEATH, 0, 0.206, 0, 0.234, 0.052, 0.178)),
 ];
-// ---- mass 3: the head, and it is a HELMET first: bright dome, one hard dark line, small face.
-// The band used to sit AT the eye line and the beard came up to meet it, so the only skin left
-// between them was a sliver: the unit panel shipped a cream dome with a black slab across it and
-// a detached chin lozenge under it — "a faceless head", which is the one thing a player looks at
-// on every selection. The band moves up onto the helmet's own lower edge and thins, the beard
-// drops to the chin, and eyes and a nose fill what opens up. All of that sits under the board's
-// LOD cut on purpose: free at gameplay zoom, and the portrait is the only place it is ever seen.
+// ---- mass 3: the head, and it is a HELMET first. The old skull was 0.15 across wearing a
+// beard and a brow, which at forty pixels is a pale ovoid with a smudge on it — the review's
+// "bald ovoid head with a smeared face". The cranium shrinks, each unit's helm grows over it
+// and a dark browband cuts the two apart, so the eye gets a bright dome, a hard dark line and
+// a small dark face under it. The brow and nose sit under the board's LOD cut on purpose: free
+// at gameplay zoom, and the portrait is the only place they are ever seen.
 const head = (skin = C.skin) => [
-  P('sph', 2, skin, M_SKIN, 0, -0.004, 0.016, 0.132, 0.146, 0.132),
-  D(P('sph', 2, C.hair, M_CLOTH, 0, -0.070, 0.030, 0.116, 0.050, 0.092)),   // jaw + beard
-  P('sph', 2, skin, M_SKIN, 0, -0.024, 0.086, 0.032, 0.030, 0.030),         // nose (portrait)
-  // EYES ARE SOCKETS, NOT BEADS. Two skin-proud spheres read as rivets on a doll at 192 px —
-  // the panel's own review called the face "a pink oval with a smudge". One shallow shadow
-  // band under the brow does the whole job: it is what an eye line IS at this size.
-  D(P('sph', 2, 0x39281a, M_LEATH, 0, -0.008, 0.058, 0.094, 0.022, 0.052)),  // eye line  }
-  D(P('sph', 2, C.hair, M_CLOTH, 0, -0.042, 0.050, 0.072, 0.022, 0.046)),    // moustache } portrait
+  P('sph', 2, skin, M_SKIN, 0, 0.000, 0.020, 0.136, 0.152, 0.138),
+  D(P('sph', 2, C.hair, M_CLOTH, 0, -0.050, 0.046, 0.112, 0.056, 0.096)),   // jaw + beard
+  D(P('box', 2, 0x2b2018, M_LEATH, 0, 0.020, 0.080, 0.076, 0.018, 0.020)),  // brow (portrait)
+  P('sph', 2, skin, M_SKIN, 0, -0.014, 0.100, 0.046, 0.040, 0.034),         // nose (portrait)
 ];
 // ---- arms. A dark pauldron caps each shoulder and the sleeve hangs OUTBOARD of it, so at a
 // 55-degree camera the arm clears the torso's plan outline by most of its own width. That gap
@@ -657,10 +641,6 @@ const sword = (bone, rz = 0.52, len = 0.44) => {
     P(g, bone, c, mr, hx + dx * t, hy + dy * t, hz, sx, sy, sz, 0, 0, rz);
   return [
     p('sph', C.skin, M_SKIN, -0.010, 0.086, 0.082, 0.086),                       // hand on the hilt
-    // GRIP. The fist sat at the cuff and the guard sat a centimetre clear of it, so the blade
-    // began in mid-air with daylight under the pommel — "the sword floats detached, no arm
-    // reaching it". One short bar closes the hand to the guard and the weapon reads as held.
-    p('cyl', C.woodD, M_WOOD, 0.030, 0.046, 0.090, 0.046),                       // grip
     p('box', C.kit, M_MET, 0.064, 0.150, 0.030, 0.046),                          // crossguard
     p('box', 0x6a7278, [0.42, 0.52, 0, 2], 0.064 + len * 0.5, 0.044, len, 0.023),
     p('cone', 0x7a838a, [0.42, 0.52, 0, 2], 0.064 + len + 0.058, 0.044, 0.116, 0.023),
@@ -683,13 +663,13 @@ const DEFS = {
       // HELM OVER SKULL, then a hard dark line under it. The dome is wider than the cranium
       // and the browband is wider again, so the head silhouette is bronze-cap / dark-band /
       // dark-jaw from the top down and there is no bald ovoid left to read.
-      P('sph', 2, C.kit, M_HELM, 0, 0.056, -0.006, 0.170, 0.144, 0.168),             // helm bowl
-      D(P('cyl', 2, C.leatherD, M_LEATH, 0, 0.012, 0.006, 0.186, 0.034, 0.172)),     // brow rim
+      P('sph', 2, C.kit, M_HELM, 0, 0.062, -0.008, 0.170, 0.122, 0.168),             // helm dome
+      D(P('cyl', 2, C.leatherD, M_LEATH, 0, 0.010, 0.006, 0.204, 0.042, 0.188)),     // brim
       // CREST, and it runs FORE-AFT. A transverse fin sits behind the head at this camera and
       // reads as a crate bolted to the helmet; a comb along the crown is a dark stripe straight
       // down the middle of the dome, which is the one mark that turns a pale ovoid into a
       // helmet from above. Dark, because a bright one fights the helm for the accent band.
-      D(P('sph', 2, 0x33281a, M_LEATH, 0, 0.088, -0.004, 0.064, 0.128, 0.208)),
+      D(P('sph', 2, 0x33281a, M_LEATH, 0, 0.098, -0.008, 0.058, 0.134, 0.220)),
       ...shield(3, 0.098, -0.118, 0.152, 0.156),
       ...sword(4),
     ],
@@ -700,8 +680,8 @@ const DEFS = {
     foot: 0.24, h: 1.30, piv: HP, gait: 1,
     parts: [
       ...legs(), ...torso(), ...head(), ...arms(C.wool),
-      P('cone', 2, C.steel, M_HELM, 0, 0.090, 0, 0.194, 0.214, 0.194),               // conical helm
-      D(P('cyl', 2, C.leatherD, M_LEATH, 0, 0.010, 0.004, 0.188, 0.034, 0.174)),     // brow rim
+      P('cone', 2, C.steel, M_HELM, 0, 0.104, 0, 0.190, 0.204, 0.190),               // conical helm
+      D(P('cyl', 2, C.leatherD, M_LEATH, 0, 0.012, 0.004, 0.196, 0.036, 0.180)),     // brim
       ...shield(3, 0.100, -0.116, 0.156, 0.166),
       D(P('cyl', 4, C.woodD, M_WOOD, -0.055, 0.190, 0.050, 0.036, 0.98, 0.036, 0, 0, -0.08)),
       P('cone', 4, C.steel, M_MET, -0.100, 0.745, 0.050, 0.072, 0.26, 0.072, 0, 0, -0.08),
@@ -746,11 +726,11 @@ const DEFS = {
       D(P('sph', 4, C.leatherD, M_LEATH, 0, 0.014, 0.004, 0.142, 0.108, 0.146)),
       D(P('limb', 3, C.cloak, M_CLOTH, 0.030, -0.112, 0, 0.090, 0.122, 0.092, 0, 0, 0.30)),
       D(P('limb', 4, C.cloak, M_CLOTH, -0.030, -0.112, 0, 0.090, 0.122, 0.092, 0, 0, -0.30)),
-      P('sph', 2, C.skin, M_SKIN, 0, 0.002, 0.014, 0.126, 0.136, 0.126),
-      D(P('sph', 2, C.hair, M_CLOTH, 0, -0.066, 0.028, 0.110, 0.048, 0.088)),        // jaw
-      P('sph', 2, C.kit, M_HELM, 0, 0.052, -0.006, 0.170, 0.142, 0.166),
-      D(P('cyl', 2, C.leatherD, M_LEATH, 0, 0.008, 0.006, 0.180, 0.034, 0.168)),     // brow rim
-      D(P('sph', 2, 0x33281a, M_LEATH, 0, 0.086, -0.004, 0.062, 0.124, 0.202)),      // crest
+      P('sph', 2, C.skin, M_SKIN, 0, 0.006, 0.018, 0.128, 0.138, 0.130),
+      D(P('sph', 2, C.hair, M_CLOTH, 0, -0.038, 0.044, 0.106, 0.060, 0.090)),        // jaw
+      P('sph', 2, C.kit, M_HELM, 0, 0.060, -0.008, 0.166, 0.120, 0.164),
+      D(P('cyl', 2, C.leatherD, M_LEATH, 0, 0.008, 0.006, 0.200, 0.042, 0.184)),     // brim
+      D(P('sph', 2, 0x33281a, M_LEATH, 0, 0.096, -0.008, 0.056, 0.132, 0.216)),      // crest
       D(P('cyl', 4, C.woodD, M_WOOD, 0.020, 0.230, 0.040, 0.032, 0.92, 0.032, 0.10, 0, 0.07)),
       P('cone', 4, C.steel, M_MET, 0.075, 0.720, 0.090, 0.062, 0.20, 0.062, 0.10, 0, 0.07),
     ],
@@ -3438,15 +3418,11 @@ export class Units {
       // and a tight occlusion disc right at the soles. The sun-aligned wedge above says WHERE
       // the light is; this says the boots are touching. Without both, a figure reads as a
       // sticker with a shadow painted next to it.
-      // ~0.45 of the hex radius, per the brief: plateau under the boots, feathered to nothing
+      // 0.55 of the hex inradius, per the brief: plateau under the boots, feathered to nothing
       // at the rim, MULTIPLYING the ground so it carries the terrain's own hue and can never be
-      // the grey (or worse, blue) puddle five reviews have drawn a box around. SIZED OFF THE
-      // BOOTS: the soles span 0.43 world, so a 0.62 radius shows a rim of contact all round and
-      // stops there. The last pass ran it at 0.84 and near-black, which pooled darkness BETWEEN
-      // the legs and out past the shoulders — the judge read the result as "a wide dark anvil,
-      // no waist, no leg separation". The gap between a man's legs is lit ground; keep it lit.
-      _m.compose(_v.set(u.x, base + 0.030, u.z), _q2.identity(), _s.set(w * 1.92, 1, w * 1.92));
-      this.shadows.push(_m, AO_MUL, dk * 0.84 * (1 - lift), 0);
+      // the grey (or worse, blue) puddle five reviews have drawn a box around.
+      _m.compose(_v.set(u.x, base + 0.026, u.z), _q2.identity(), _s.set(w * 1.45, 1, w * 1.45));
+      this.shadows.push(_m, AO_MUL, dk * 0.80 * (1 - lift), 0);
       // NO BASE DISC AND NO OWNERSHIP HEX. grid.js draws the territory band and the selection
       // ring on these exact edges, and a livery puddle the size of the soldier out-read the
       // model it was supposed to point at — the eye found a blue oval first and the figure
