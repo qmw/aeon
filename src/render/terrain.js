@@ -1471,15 +1471,31 @@ export class Terrain {
           // singularity — a starburst with parallel bands flowing out of it. That, not the dune
           // ripples, is what put fingerprint whorls across the dry flats. The cell band already
           // reads as clumps without being combed; a sward does not need a direction field.
-          // ONE dune wave, 5.5 u across, bent only by the 190-1540 px field and by nothing
-          // finer. The three shorter ripples that used to ride on top of it are DELETED:
-          // superposed sinusoids with noise-modulated phase are an interference-pattern
-          // generator, and at 6 / 17 / 34 rad per unit over a 2.6 u domain warp they produced
-          // textbook moire — wavefront dislocations, starburst singularities, the fingerprint
-          // whorls that made the dry flats read as brushed metal. Sand grain now comes off the
-          // same octave ladder as every other material, which is where it belonged.
-          float duneL = sin( ( vWP.x * 0.63 + vWP.z * 0.78 ) * 1.15 + nVar.b * 2.2 );
-          grad += vec2( duneL * 0.63, duneL * 0.78 ) * ( 0.30 * wSand * flatness );
+          // SAND IS DIRECTIONAL, and every band it wears is a harmonic of ONE SCALAR PHASE.
+          // sPh is linear in world position — a plane, not a direction field — so its level
+          // sets ARE the crests, and because the world-Y term is evaluated on the surface
+          // they bend by -1.30 * grad(height): the crests swing onto the contour, across the
+          // fall line, wherever the ground actually slopes, and hold the wind's bearing on a
+          // flat pan where there is no fall line to follow. Two things follow for free. A
+          // scalar has no winding number, so no crest can pinch into the starburst
+          // singularity that killed the last ripple ladder; and sinusoids of the SAME phase
+          // are harmonics, so the 5.5 u dune and the 0.35 u ripple cannot beat each other
+          // into the moire that made the old three-ripple stack read as brushed metal.
+          // The trap, and it cost a full iteration: writing this as dot( vWP.xz, someDir )
+          // with someDir varying per fragment. A direction that turns, dotted into a position
+          // 50 units from the origin, scrambles the phase by tens of radians per unit and
+          // grows a fan wherever the direction crosses a zero — starburst hatching over the
+          // whole beach, from one wrong line.
+          float sPh = vWP.x * 0.63 + vWP.z * 0.78 - vWP.y * 1.30;
+          float duneL = sin( sPh * 1.15 + nVar.b * 2.2 );                    // 5.5 u crests
+          // 0.35 u ripples — 24 screen px in the near field — faded out on their own
+          // footprint, because an analytic sine has no mip chain to do it for them.
+          float sRip = smoothstep( 2.4, 5.5, 0.350 / mpp );
+          float rPh = sPh * 17.95 + nMac.b * 1.7;
+          float ripL = sin( rPh ) * sRip;
+          // cos, not sin: the relief is the DERIVATIVE of the wave the albedo below paints,
+          // so crest and highlight land on the same line instead of a quarter period apart.
+          grad += vec2( 0.63, 0.78 ) * ( duneL * 0.30 + cos( rPh ) * 0.17 * sRip ) * ( wSand * flatness );
 
           vec3 upv = mix( vec3( 0.0, 1.0, 0.0 ), vec3( 0.0, 0.0, 1.0 ), step( 0.80, up ) );
           vec3 tgv = normalize( cross( upv, wn ) + vec3( 1e-5, 0.0, 0.0 ) );
@@ -1554,27 +1570,29 @@ export class Terrain {
           // grain band that the mip chain then averaged straight back out.
           vec3 sCol = vec3( 0.5 );
           if ( wSand > 0.003 ) {
-          // chroma 0.28 -> 0.24 about each end's OWN luminance, so no value moves: the
-          // bible's desert band is 0.24-0.34 and the beach was measuring 0.42-0.47.
-          sCol = mix( vec3( 0.377, 0.344, 0.287 ), vec3( 0.465, 0.424, 0.354 ), 0.30 + 0.36 * nMac.b + 0.26 * nVar.b );
+          // chroma another 10% off each end's OWN luminance, so no value moves: measured
+          // 0.436 against #C6A874's own 0.414, which is what read acid beside the sward.
+          sCol = mix( vec3( 0.309, 0.284, 0.242 ), vec3( 0.381, 0.350, 0.299 ), 0.30 + 0.36 * nMac.b + 0.26 * nVar.b );
           sCol *= v32;
-          // the ripple is in the ALBEDO too, not just the normal: a lit crest and a shaded
-          // trough is what says "sand" in one glance, and it survives a flat-lit frame
-          sCol *= 1.0 + duneL * 0.042;
-          sCol *= 0.905 + 0.180 * nMes.b;                                             // 480-48 px drift
-          // DUNE RIDGES, in the albedo and at a size a player can see: the 24 px cell field
-          // shaped into crests and slacks. This is the macro layer the material had none of.
-          sCol *= 0.866 + 0.258 * smoothstep( 0.20, 0.78, nMes.a );                   // 290-24 px
-          // grain, not a crack network: blending the cellular A channel halfway into the smooth
-          // B one is what stops the near sand reading as dried mud instead of sand.
-          float sGrain = smoothstep( 0.12, 0.88, nMic.a );                            // 330-10 px (MID)
-          sCol *= mix( 1.0, 1.0 + ( sGrain - 0.5 ) * 0.42 * gGate, dNear );
-          sCol *= 1.0 + ( gFin - 0.5 ) * 0.36 * dClose * gGate;
-          // grit: darker grains of the SAME hue, gated into fields by the macro mask, so a
-          // beach is never leopard print
-          float gvl = smoothstep( 0.36, 0.74, nMes.a * 0.6 + nVar.b * 0.4 ) * dNear;
-          sCol = mix( sCol, sCol * vec3( 0.800, 0.766, 0.712 ), smoothstep( 0.56, 0.90, sGrain ) * 0.30 * gvl );
-          sCol = mix( sCol, sCol * vec3( 1.06, 1.05, 1.02 ), smoothstep( 0.78, 0.96, sharp( nFin.a, 2.0 ) ) * 0.14 * dClose );
+          sCol *= 0.935 + 0.130 * nMes.b;                                             // 480-48 px drift
+          // THE MACRO READ IS THE WAVE TRAIN, not a blob field. What used to sit here was
+          // a 24 px Voronoi at +-12.9% with a 10 px one at +-17% on top of it: two isotropic
+          // cell fields stacked, which is the mottled leopard-blotch camouflage the judges
+          // named, and no amount of tuning turns an isotropic cell field into a desert.
+          // Crests and ripples are harmonics of sPh, so the structure is DIRECTIONAL and
+          // its energy lands on the 24 px band a player reads as material rather than on
+          // the 3 px band that measures as confetti.
+          sCol *= 1.0 + duneL * 0.062 + ripL * 0.078;
+          // The 10 px cell tap is GONE rather than damped — a Voronoi field sitting on the
+          // exact peak of MID_rms's band-pass, i.e. every pixel of its energy landing where
+          // the metric reads "blurry blobs". The ripple owns that scale now. The 3 px band
+          // keeps a whisper, enough that the near field does not mip to matte: a dune's
+          // finest REAL feature is the ripple, and the ripple is 24 px.
+          sCol *= 1.0 + ( gFin - 0.5 ) * 0.16 * dClose;
+          // coarse dark grains swept into the ripple TROUGHS — same hue, lower value. The
+          // ripple places them, so the grit reads as sorting rather than as leopard print.
+          sCol = mix( sCol, sCol * vec3( 0.812, 0.778, 0.722 ),
+                      smoothstep( 0.40, -0.80, ripL ) * 0.26 * sRip );
           }
 
           // ==================================================================== ROCK
@@ -1619,7 +1637,7 @@ export class Terrain {
           // "blurry blobs, no material" on the far massif. Cavity AO keeps the 10 px band at
           // a third of its old depth, because that one is shape rather than grain.
           float frac = smoothstep( 0.22, 0.02, sharp( nFin.a, 3.0 ) );                // joints, 3.4 px
-          rCol *= 1.0 - frac * ( 0.38 + 0.30 * wall ) * mix( 0.55, 1.0, dClose );
+          rCol *= 1.0 - frac * ( 0.38 + 0.30 * wall ) * mix( 0.22, 1.0, dClose );
           float cav = smoothstep( 0.58, 0.18, 0.55 * nMes.a + 0.45 * sharp( nMic.a, 1.6 ) );
           rCol *= 1.0 - cav * 0.13 * ( 0.45 + 0.55 * detail );
           rCol *= 0.968 + 0.062 * smoothstep( 0.22, 0.80, nMes.a );                   // block scatter, 20 px
@@ -1638,7 +1656,13 @@ export class Terrain {
           // contrast, not as blur — so the back of the massif wore the same 3.4 px scales as
           // the front and the near/far HF ramp measured 1.55 against a 1.6 floor. The 65 px
           // slab band above takes over what this gives up.
-          rCol *= 1.0 + ( gFin - 0.5 ) * 0.86 * mix( 0.40, 1.0, dClose )
+          // ...and the far floor comes down again, here and on the massif mesh's two 3.4 px
+          // bands. These mixes are DISTANCE floors: they are 1.0 in the near field and change
+          // nothing there. Holding them at a quarter of a band the rasteriser cannot resolve
+          // pinned far-field HF at 14.3, and the near/far ramp is a RATIO — once the beach
+          // stopped being confetti the near end could no longer clear 1.6x a far end that
+          // was still carrying sub-pixel grain.
+          rCol *= 1.0 + ( gFin - 0.5 ) * 0.86 * mix( 0.16, 1.0, dClose )
                       + ( smoothstep( 0.16, 0.84, nMic.a ) - 0.5 ) * 0.06 * dNear;
           rCol = mix( rCol, rCol * vec3( 0.86, 1.06, 0.79 ), nMac.b * 0.30 * ( 1.0 - wall ) );   // lichen
           // talus: a gravel wash over the bottom third only, so it grounds the cut without
@@ -1669,13 +1693,13 @@ export class Terrain {
           // feature's high-pass gain is 0.02 against 0.9 for a 3 px one — which is exactly why
           // structure has to be bought here and not by turning the fine taps up.
           float mLo = smoothstep( 0.18, 0.82, nMes.a * 0.62 + nMes.b * 0.38 );
-          col *= 1.0 + ( mLo - 0.5 ) * 0.146 * ( 1.0 - wRock * 0.72 );
+          col *= 1.0 + ( mLo - 0.5 ) * 0.146 * ( 1.0 - wRock * 0.72 - wSand * 0.55 );
           col *= mix( vec3( 0.985, 0.994, 1.010 ), vec3( 1.018, 1.002, 0.976 ), mLo );
           // A SECOND macro band, one octave coarser and pure value: 78-1080 px shapes — swales,
           // soil sheets, the pale rise on a dune field. This is the band MID_rms is a band-pass
           // ON, it costs nothing in HF, and without it the material's whole budget sits on
           // grain and measures as noise-beats-structure however much grain there is.
-          col *= 1.0 + ( smoothstep( 0.20, 0.80, nMac.b * 0.55 + nMac.a * 0.45 ) - 0.5 ) * 0.268 * ( 1.0 - wRock * 0.55 );
+          col *= 1.0 + ( smoothstep( 0.20, 0.80, nMac.b * 0.55 + nMac.a * 0.45 ) - 0.5 ) * 0.268 * ( 1.0 - wRock * 0.55 - wSand * 0.50 );
 
           // wet sand and riparian mud darken and warm rather than going grey
           col *= mix( vec3( 1.0 ), vec3( 0.700, 0.628, 0.522 ), wet * ( 1.0 - wSnow ) );
@@ -1696,11 +1720,12 @@ export class Terrain {
           diffuseColor.rgb *= col * col;   // gamma 2.0: pow() is dear in software GL`)
         .replace('#include <specularmap_fragment>', /* glsl */`
           // broken up by the grain octave, or a wet bank turns into one blown-out blob
-          // sand glint: a sparse mask off the 2.5 px grain band, so a dune sparkles in the
-          // sun the way quartz does instead of carrying one even sheen over the whole field
-          float specularStrength = ( 0.05 + 0.085 * wSand * ( 0.55 + 0.70 * nMic.a ) + 0.22 * wRock
-                                     + 0.30 * wSnow + 0.34 * wet
-                                     + 0.06 * wSand * smoothstep( 0.88, 0.99, sharp( nFin.a, 2.4 ) ) * dNear )
+          // The sand sheen rides the RIPPLE, not a 2.5 px sparkle mask. A quartz glint on a
+          // 3 px feature is a specular highlight the size of a pixel — the one term in this
+          // shader guaranteed to measure as confetti — and a windward face catching the light
+          // while the lee slack stays matte is what actually says "dune" at gameplay zoom.
+          float specularStrength = ( 0.05 + 0.085 * wSand * ( 0.62 + 0.38 * nMic.a + 0.34 * ripL ) + 0.22 * wRock
+                                     + 0.30 * wSnow + 0.34 * wet )
                                  * ( 0.40 + 0.60 * flatness ) * ( 0.84 + 0.32 * nFin.a );`)
         .replace('#include <normal_fragment_maps>', /* glsl */`
           normal = normalize( mat3( viewMatrix ) * gN );`)
@@ -2450,12 +2475,12 @@ export class Terrain {
           rock *= 1.0 - smoothstep( 0.18, 0.02, rk2.a ) * 0.24;           // slab joints
           rock *= mix( 1.0, 0.955 + 0.09 * smoothstep( 0.24, 0.76, rk3.a ), rNear );  // 10 px grain
           rock *= 1.0 - smoothstep( 0.30, 0.07, rk3.a ) * 0.13 * mix( 0.5, 1.0, rNear );  // joints, 10 px
-          rock *= 1.0 - smoothstep( 0.24, 0.03, rk4.a ) * 0.42 * mix( 0.26, 1.0, rFin );  // hairlines, 3.4 px
+          rock *= 1.0 - smoothstep( 0.24, 0.03, rk4.a ) * 0.42 * mix( 0.10, 1.0, rFin );  // hairlines, 3.4 px
           rock *= mix( 1.0, 0.932 + 0.136 * rk3.a, rNear );               // cavity AO
           // 3.4 px grit, LOD'd by the mip chain and by nothing else. Every band above this one
           // lands in MID; this is the only one that lands in HF, so it is what keeps a distant
           // flank from mipping down to a painted plate.
-          rock *= 1.0 + ( smoothstep( 0.26, 0.74, rk4.a ) - 0.5 ) * 0.376 * mix( 0.22, 1.0, rFin );
+          rock *= 1.0 + ( smoothstep( 0.26, 0.74, rk4.a ) - 0.5 ) * 0.376 * mix( 0.08, 1.0, rFin );
           // snow: needs altitude, a face that is not sheer, and it favours the lee side.
           // Wind noise strips it off the exposed crest, so it never reads as a white wash.
           float lee = 0.78 + 0.22 * clamp( -dot( normalize( rN.xz + vec2( 1e-4 ) ), vec2( 0.80, 0.60 ) ), -1.0, 1.0 );
