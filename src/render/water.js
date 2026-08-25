@@ -1303,7 +1303,17 @@ const COMMON = /* glsl */`
     // against the mid sea's 131 (lighter, as the rule wants), post-fog it is 100 against 105.
     // The water cannot turn that layer off, so it has to out-run it: a stronger airlight over
     // the eight world units the frame actually spans.
-    float f = smoothstep(28.5, 38.5, dist) * 0.58;
+    // HALF THE OLD RAMP, AND IT STARTS FURTHER OUT — because post.js is already hazing this
+    // pixel and the two were stacking. MEASURED with the uK1.w taps: on the open sea the column
+    // leaves this shader's body at (7,59,110), which IS the bible's #123A63 (18,58,99); the
+    // fresnel and the sun path take it to (29,77,120); THIS FUNCTION then adds (39,27,29) of
+    // grey airlight, and post's own distance veil (uHazeK 0.31 toward (162,187,211), full
+    // strength past 26 u of horizontal distance) adds (50,58,65) more on top of that. Hazed
+    // twice, the sea arrives at (97,130,168) — a pale steel blue at coast brightness, which is
+    // exactly what the referee has measured three times. Post's veil is not optional and not
+    // mine; this one is. Pushed out to 30-44 u it still lifts the horizon (the fog sheet over
+    // the unexplored ocean has to be out-run) while the readable sea in front of it deepens.
+    float f = smoothstep(30.0, 44.0, dist) * 0.40;
     // CHROMA GOES FIRST. Air eats saturation over a shorter run than it adds light, and the two
     // want different ramps here for a measured reason: the airlight has to stay off the near
     // water or it lifts the foreground as hard as the background and the depth gradient never
@@ -1314,8 +1324,8 @@ const COMMON = /* glsl */`
     // vignette, which is the art bible's aerial-perspective rule run backwards; post keeps its
     // fog colour deliberately dark so the sea does not out-shout the land, so clamp here.
     float lc = dot(col, LUMA);
-    haze *= clamp((lc * 1.55) / max(dot(haze, LUMA), 1e-4), 1.0, 6.0);
-    col = mix(col, vec3(lc), smoothstep(23.0, 38.0, dist) * 0.40);
+    haze *= clamp((lc * 1.32) / max(dot(haze, LUMA), 1e-4), 1.0, 6.0);
+    col = mix(col, vec3(lc), smoothstep(29.0, 44.0, dist) * 0.30);
     return mix(col, haze, f);
   }
 `;
@@ -1379,11 +1389,24 @@ const OCEAN_FRAG = /* glsl */`
   // predictably, so the blob band is built the same way as the pixel band, one octave up. (A
   // value band-pass off the height channel was tried and carries almost no energy: K_BLOB 8 to
   // 16 moved MID_rms under 3%.)
-  const float K_GRAIN = 0.55;    // 1-4 px slope band   -> HF
-  const float K_MIDS  = 3.80;    // 5-20 px slope band  -> MID
-  const float K_BLOB  = 3.80;    // 10-35 px brightness band, wind-aligned
+  // MEASURED on the delivered frame (tools/metrics.mjs, region 1200,300,240,160): the open sea
+  // came back HF_rms 3.5 against a 7-15 band and MID/HF 3.9 against 0.9-1.3 — i.e. the pixel
+  // band was starved to a quarter of what a water surface carries and the 10-35 px brightness
+  // band was carrying the whole sea on its own. That is not "structure": at those numbers the
+  // only thing on the water is a mat of pale 20-40 px patches with nothing inside them, which
+  // is exactly the cream-cornflake read four passes of this file have been rejected for. The
+  // budget moves the other way now — the 1-4 px slope band up 3.6x, the blob band down a
+  // quarter — so the sea is a fine ripple texture with swell structure ON it rather than blobs
+  // with nothing in them.
+  const float K_GRAIN = 4.00;    // 1-4 px slope band   -> HF
+  const float K_MIDS  = 2.60;    // 5-20 px slope band  -> MID
+  const float K_BLOB  = 2.00;    // 10-35 px brightness band, wind-aligned
   const float K_CHOP  = 11.00;    // crest-train column shading -> MID
-  const float K_LEVEL = 0.86;    // overall water brightness
+  // THE OPEN SEA SITS AT COAST BRIGHTNESS. Measured on the same frame: the deep NE came back
+  // (97,133,170), luma 128, against the bible's ocean #123A63 (18,58,99), luma 52 — two and a
+  // half stops hot, which is why it reads as a bright shelf everywhere instead of deepening
+  // offshore. The hue was already right (211 measured, 211 specified); only the level was not.
+  const float K_LEVEL = 0.68;    // overall water brightness
 
   void main() {
     vec3 toCam = cameraPosition - vWorld;
@@ -1496,10 +1519,16 @@ const OCEAN_FRAG = /* glsl */`
     // feeding the 5-17 px window at all and lands entirely in the pixel window. The frame came
     // back HF 11.8 against MID 5.4 — a wave train measuring as grain. Rounder crests, more of
     // them, and the read moves back into the band the eye follows a wave in.
-    float k1 = 1.0 - smoothstep(0.100, 0.230, px);
-    float k2 = 1.0 - smoothstep(0.055, 0.128, px);
-    float k3 = 1.0 - smoothstep(0.030, 0.070, px);
-    float k4 = 1.0 - smoothstep(0.017, 0.042, px);
+    // ...and each train now lives until its crest is about FOUR screen pixels rather than six.
+    // That is where the open sea's missing band went: at the gameplay camera the mid-field sea
+    // sits near 0.10 u per pixel, which killed t2/t3/t4 outright and left one train plus a blob
+    // field — measured HF 3.5 against a 7-15 band with MID/HF 3.9. A four-pixel crest is still a
+    // LINE, and a line is what puts energy in the pixel window without laying a grain of
+    // confetti; the Toksvig term below takes back as roughness whatever the LOD does throw away.
+    float k1 = 1.0 - smoothstep(0.140, 0.320, px);
+    float k2 = 1.0 - smoothstep(0.077, 0.180, px);
+    float k3 = 1.0 - smoothstep(0.042, 0.098, px);
+    float k4 = 1.0 - smoothstep(0.024, 0.059, px);
     vec3 t1 = train(p, vec2( 0.423, 0.906), 0.620, 0.30, 0.36 * chopK, 2.6, 0.20) * k1;
     vec3 t2 = train(p, vec2( 0.174, 0.985), 0.340, 0.23, 0.38 * chopK, 2.0, 0.25) * k2;
     vec3 t3 = train(p, vec2( 0.643, 0.766), 0.185, 0.17, 0.20 * chopK, 2.0, 0.30) * k3;
@@ -1690,7 +1719,7 @@ const OCEAN_FRAG = /* glsl */`
     // Relative ceiling: the mirror may be four times the water's own luminance, which at a
     // grazing fresnel lands the far sea brighter than the near sea — the gradient a real ocean
     // has — without ever letting a cloud bleach a near hex.
-    refl *= min(1.0, (dot(col, LUMA) * 4.0) / max(dot(refl, LUMA), 1e-4));
+    refl *= min(1.0, (dot(col, LUMA) * 2.1) / max(dot(refl, LUMA), 1e-4));
     col = mix(col, refl, fres);
 
     // ---- THE SUN ON THE WATER. Two passes of one isotropic GGX lobe, gathered into a glare
@@ -1711,7 +1740,7 @@ const OCEAN_FRAG = /* glsl */`
     // against a normal field carrying centimetre ripples selects the CONTOUR where those ripples
     // face the sun, and a broad lobe on a contour draws broad pale squiggles.
     vec3 NM = normalize(vec3(vGN.x + t1.y + t2.y, vGN.y, vGN.z + t1.z + t2.z));
-    vec3 spec = sunSpec(NM, V, H, 0.26, 0.075 * path * (0.55 + 0.70 * streak))
+    vec3 spec = sunSpec(NM, V, H, 0.26, 0.050 * path * (0.55 + 0.70 * streak))
               + sunSpec(N, V, H, rough, (0.230 * track + 0.008) * (0.35 + 0.90 * streak)
                         * (0.60 + 1.10 * smoothstep(0.30, 0.92, chop))
                         * mix(0.55, 1.0, f3)
@@ -1725,7 +1754,7 @@ const OCEAN_FRAG = /* glsl */`
     float crest = smoothstep(0.12, 0.92, vCrest) * 0.55 + smoothstep(0.66, 1.18, nA.b + nB.b) * 0.12
                 + smoothstep(0.46, 0.92, chop) * 0.55;
     col += vec3(0.09, 0.40, 0.33) * sunRadiance() * 0.3183098
-         * crest * (0.25 + 0.75 * back) * 0.50 * shadeSpec * (1.0 - vLake);
+         * crest * (0.25 + 0.75 * back) * 0.34 * shadeSpec * (1.0 - vLake);
 
     // ---- shoreline. The waterline the player sees is where the terrain crosses the water
     // plane, so the surf is driven by DEPTH and by the field's signed distance to that exact
@@ -1837,8 +1866,8 @@ const OCEAN_FRAG = /* glsl */`
     // cream cornflake rather than a wave. The deep keeps the full budget, which is where the
     // metric's MID window is measured and where a wave band actually reads as a wave.
     float shoalBand = mix(0.40, 1.0, shoalShade);
-    float gA = clamp(grain, -0.70, 0.70) * K_GRAIN * uK0.x * aRef * mix(0.82, 1.0, vBody) * mix(0.35, 1.0, f3) * shoalBand;
-    float gB = clamp(midS,  -0.80, 0.80) * K_MIDS  * uK0.w * aRef * mix(0.82, 1.0, vBody) * mix(0.55, 1.0, f2) * shoalBand;
+    float gA = clamp(grain, -0.70, 0.70) * K_GRAIN * uK0.x * aRef * mix(0.82, 1.0, vBody) * mix(0.60, 1.0, f3) * shoalBand;
+    float gB = clamp(midS,  -0.80, 0.80) * K_MIDS  * uK0.w * aRef * mix(0.82, 1.0, vBody) * mix(0.70, 1.0, f2) * shoalBand;
     gA = gA / sqrt(1.0 + gA * gA / 0.3844);          // saturates at +-0.62
     gB = gB / sqrt(1.0 + gB * gB / 1.2100);          // saturates at +-1.10
     // ...and the SUM gets its own knee, ASYMMETRIC, because the two sides are not the same
@@ -2136,7 +2165,7 @@ const RIVER_FRAG = /* glsl */`
     // which is the ratio a real river photographs at, and the reach stays legible because it is
     // a textured channel with lit bank lips, white riffles and a width that grows downstream —
     // not because it out-shouts the land.
-    col *= 0.58;
+    col *= 0.70;
 
     float fres = 0.02 + 0.98 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
     vec3 R = reflect(-V, N); R.y = max(R.y, 0.04);
@@ -2188,8 +2217,11 @@ const RIVER_FRAG = /* glsl */`
                                 nr.y * sign(vU) * 0.9 + slope.y * 0.2));
     vec3 bankCol = vec3(0.112, 0.097, 0.070) * (0.45 + 0.95 * r2.b)
                  * sceneLight(0.16 + 0.84 * max(dot(bankN, uSun), 0.0), 0.24 + 0.76 * shadow);
-    bankCol *= mix(1.0, 0.34, ao);                            // AO gradient up out of the cut
-    bankCol *= mix(vec3(1.0), vec3(0.27, 0.31, 0.38), wetB);  // wet gravel: darker and cooler
+    bankCol *= mix(1.0, 0.55, ao);                            // AO gradient up out of the cut
+    // Damp EARTH, not slate. The old cold tint took a bank that is 40 cm from a grass hex and
+    // recoloured it blue-grey, and blue-grey at 0.9 alpha over two hexes of ground is a slab
+    // whatever is written above it.
+    bankCol *= mix(vec3(1.0), vec3(0.62, 0.55, 0.49), wetB);  // wet earth: darker, barely cooler
 
     // Soft edges: the ribbon fades over ~8% of its own width instead of stopping on a hard
     // alpha cut, which is what leaves the stair-stepped silhouette an unfiltered decal shows.
@@ -2201,7 +2233,15 @@ const RIVER_FRAG = /* glsl */`
     float wAlpha = smoothstep(1.03, 1.03 - aaU, au) * clamp(vFade, 0.0, 1.0);
     // no 1.2x overshoot on the bank: it held the levee at full opacity through the whole stretch
     // where the sheet it belongs to was already fading out
-    float wa = bankMask * (1.0 - wAlpha) * clamp(vFade, 0.0, 1.0);
+    // THE SLAB, and this is the measurement that found it (tools probe: hide THIS ONE MESH and
+    // the pale blue-grey sheet lying across the hexes north of Aurelia disappears entirely,
+    // leaving clean grass). The bank skirt is 0.62 u of geometry either side of the waterline
+    // and it was drawn at bankMask alpha — 0.9 at the lip, still 0.5 half a hex out — so a
+    // two-unit-wide opaque wash sat over the terrain along every reach. A wet margin is a
+    // NARROW, PARTLY TRANSPARENT darkening of the ground that is already there: squared, so it
+    // is a 0.3 u damp rim hugging the water instead of an apron, and capped at 0.62 so the
+    // terrain's own material reads straight through it.
+    float wa = bankMask * bankMask * (1.0 - wAlpha) * clamp(vFade, 0.0, 1.0) * 0.62;
     float a = clamp(wAlpha + wa, 0.0, 1.0);
     if (a < 0.004) discard;
     col = mix(col, foamCol, foam * wAlpha);
@@ -2212,7 +2252,12 @@ const RIVER_FRAG = /* glsl */`
     col *= mix(1.0, 0.75, wAlpha);
     col = mix(bankCol, col, clamp(wAlpha / max(a, 1e-3), 0.0, 1.0));
 
-    gl_FragColor = vec4(aerial(col, dist, -V), a);
+    // A THIRD OF THE SEA'S AIRLIGHT. That ramp is tuned for open water running hundreds of
+    // units past the map rim; this is a DECAL on near-field land, and post.js has already hazed
+    // the ground underneath it. At full strength it mixed 58% of an airlight clamped above
+    // the surface's own luminance into a dark damp bank, which is how a gravel margin arrived
+    // at the framebuffer as pale blue-grey paint. A decal must not be hazed twice.
+    gl_FragColor = vec4(mix(col, aerial(col, dist, -V), 0.34), a);
   }
 `;
 
