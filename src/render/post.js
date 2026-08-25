@@ -620,16 +620,7 @@ const GradeShader = {
       // 1.72/0.63, not 1.85/0.64: the toe above gives the shadows their range back, and a
       // darker pixel with the same absolute chroma measures MORE saturated — both sand regions
       // went through the 0.46 ceiling until this came down with it.
-      // ...and the LOW END comes off, 1.72 -> 1.44 with the knee moved 0.16 -> 0.10. At 1.72
-      // this is not a floor, it is a chroma EQUALISER: it multiplies whatever it finds under
-      // the knee back up to the same place, so the palette's own statement that MOUNTAIN is
-      // grey (sat 0.08-0.18) and grass is not cannot survive the grade. Measured: rock albedo
-      // taken from chroma 0.40 to 0.225 in terrain.js moved the far massif 0.317 -> 0.311,
-      // because this operator handed all of it straight back; with this pair the same albedo
-      // lands at 0.267. The CEILING does not move (0.63, as before), so the frame's saturated
-      // accents — banners, roofs, the sea — are untouched: a 0.46+ pixel sees exactly the gain
-      // it always did, a 0.40 one comes down 8%, and a 0.20 one comes down 28%.
-      sg *= mix(1.44, 0.63, smoothstep(0.10, 0.46, s0));
+      sg *= mix(1.72, 0.63, smoothstep(0.16, 0.46, s0));
       // Headroom on the chroma boost. 1% of the frame was clipping R and R ALONE — every one of
       // those pixels a city roof, turned into a flat vermilion blob with the tile pattern gone —
       // and none of it was a real highlight: it was this gain pushing an already-hot channel
