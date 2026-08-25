@@ -635,15 +635,23 @@ const shield = (bone, x, y, z, r) => {
 // ---- sword: a hard bright diagonal leaving the shoulder above helm height, laid out along its
 // own axis so grip, guard and point are on one line by construction — and a FIST closed on the
 // grip, because a blade growing straight out of a sleeve is the review's "no visible grip".
-const sword = (bone, rz = 0.52, len = 0.44) => {
+// A BLADE AS LONG AS THE MAN IS TALL IS NOT A SWORD, IT IS A PLANK. 0.44 of blade swung 30
+// degrees out of vertical put the point two thirds of a hex from the fist that holds it, over
+// open ground where nothing else on the figure is and across the neighbouring keep's roof — and
+// it is polished metal, the top of the value ladder, so it is also the brightest object in the
+// region. The eye files a bright bar that far from a body as its own object: that is the whole
+// of the review's "one sword blade floats detached from its hand". Shorter, narrower, steeper:
+// the point now tops out level with the crest instead of leaving the man, and every part of the
+// weapon stays inside his own outline.
+const sword = (bone, rz = 0.38, len = 0.33) => {
   const dx = -Math.sin(rz), dy = Math.cos(rz), hx = -0.062, hy = -0.238, hz = 0.026;
   const p = (g, c, mr, t, sx, sy, sz) =>
     P(g, bone, c, mr, hx + dx * t, hy + dy * t, hz, sx, sy, sz, 0, 0, rz);
   return [
     p('sph', C.skin, M_SKIN, -0.010, 0.086, 0.082, 0.086),                       // hand on the hilt
     p('box', C.kit, M_MET, 0.064, 0.150, 0.030, 0.046),                          // crossguard
-    p('box', 0x6a7278, [0.42, 0.52, 0, 2], 0.064 + len * 0.5, 0.044, len, 0.023),
-    p('cone', 0x7a838a, [0.42, 0.52, 0, 2], 0.064 + len + 0.058, 0.044, 0.116, 0.023),
+    p('box', 0x6a7278, [0.42, 0.52, 0, 2], 0.064 + len * 0.5, 0.036, len, 0.023),
+    p('cone', 0x7a838a, [0.42, 0.52, 0, 2], 0.064 + len + 0.050, 0.036, 0.100, 0.023),
   ];
 };
 
@@ -3208,6 +3216,7 @@ export class Units {
       // which is also where Civ parks them, because it is the only place they read.
       const tp = axialToWorld(u.q, u.r);
       let tx = tp.x, tz = tp.z;
+      const cb = this.camera ? Math.atan2(this.camera.position.x - tp.x, this.camera.position.z - tp.z) : 0;
       const n = Math.max(1, u.sn || 1);
       if (this._platAt.has(u.q * 4096 + u.r)) {
         // Garrison. A soldier parked on the tile centre is taller than the keep and buries the
@@ -3235,10 +3244,33 @@ export class Units {
         const a = (u.si / n) * Math.PI * 2 + (u.q + u.r) * 0.9;
         tx += Math.cos(a) * 0.42; tz += Math.sin(a) * 0.42;
       }
-      const k = Math.min(1, dt * 4);
+      // SNAP ON THE FIRST IDLE FRAME, ease after it. A unit is added on its tile CENTRE and
+      // its resting spot is up to 0.8 units away at the town kerb, so every figure on the board
+      // spends its first second walking sideways to a mark. On the fixed 1/60 step that second
+      // is the whole window post.js's TAA accumulates over, and the cast arrives as a blend of
+      // its own travel: a featureless torso, two legs melted into one column, a helmet trailing
+      // its own neck. Standing still is not an animation. Only the first frame snaps, so a unit
+      // that finishes a MOVE still eases to the kerb where the eye can follow it.
+      const snap = !u.set; u.set = 1;
+      const k = snap ? 1 : Math.min(1, dt * 4);
       u.x += (tx - u.x) * k; u.z += (tz - u.z) * k;
       const gy = u.water ? WATER_Y : this._fit(u.x, u.z, fp, u);
-      u.y += (gy - u.y) * Math.min(1, dt * 8);
+      u.y += (gy - u.y) * (snap ? 1 : Math.min(1, dt * 8));
+      // AN IDLE SOLDIER FACES THE PLAYER. Every unit was spawned on `(Math.random() - 0.5) *
+      // 0.9` of yaw and left there, so the same warrior on the same tile stood at a different
+      // angle on every load — and half of those angles are the failure the review keeps
+      // measuring: yaw a crested helm 25 degrees off the shoulder line at sixty pixels and it
+      // reads as a head that has slid off the body, with the far pauldron stranded as a
+      // detached egg and the shield swinging out past the hip. Three-quarter front is the one
+      // facing where the whole kit reads — helm over shoulders, both pauldrons, board to the
+      // side, blade on a diagonal — which is why Civ turns its idle cast toward the lens. A
+      // seeded spread keeps a stack from looking stamped; a lunge keeps its own facing.
+      // He turns ONCE, as he stops — not every frame, or the whole cast would pirouette while
+      // the player orbits the rig.
+      if (!d.boat && u.atk === undefined && (snap || u.walk > 0.02)) {
+        u.tYaw = cb + ((u.seed % 9) - 4) * 0.05;
+        if (snap) u.yaw = u.tYaw;
+      }
     }
 
     // yaw chases the travel direction the short way round
@@ -3351,7 +3383,12 @@ export class Units {
         sy = breathe;
       } else if (i === 2) {                            // head
         hs = 0.90;                                     // see HP: the head was too big for the body
-        ry = Math.sin(this.time * 0.7 + u.seed * 1.3) * 0.22 * idle - sw * 0.05 * w;
+        // 0.22 rad of idle head yaw is thirteen degrees, authored for a close-up and read on a
+        // sixty-pixel figure as a HELMET THAT HAS SLID OFF THE SHOULDER LINE — the review's
+        // "the head floats, grass showing through where the neck should be". A crested helm is
+        // the widest thing on the silhouette; anything that swings it off the body axis breaks
+        // the one read the unit has. Four degrees is alive without leaving the shoulders.
+        ry = Math.sin(this.time * 0.7 + u.seed * 1.3) * 0.07 * idle - sw * 0.05 * w;
         rx = Math.sin(this.time * 0.9 + u.seed) * 0.06 * idle;
       } else if (i === 3 || i === 4) {                 // arms / oars / throwing arm
         const s = i === 3 ? 1 : -1;
