@@ -223,6 +223,18 @@ const sunDir = new THREE.Vector3();
 // Debug switches for the screenshot harness — a broken frame is much faster to bisect with them.
 const Q = new URLSearchParams(location.search);
 if (Q.has('time')) sky?.setTimeOfDay(+Q.get('time'));
+// aeon-cam-flag: ?cam=x,y,z,tx,ty,tz parks the camera anywhere and holds it there.
+// Units are ~40px tall at gameplay zoom, which is too small to iterate on from a screenshot;
+// this lets an author shoot a close-up of the thing they are actually editing.
+if (Q.has('cam')) {
+  const n = Q.get('cam').split(',').map(Number);
+  if (n.length === 6 && n.every(Number.isFinite)) {
+    camera.position.set(n[0], n[1], n[2]);
+    camera.lookAt(n[3], n[4], n[5]);
+    camera.updateMatrixWorld();
+    if (input) { input.enabled = false; input.update = () => {}; }
+  }
+}
 const usePost = post && !Q.has('nopost');
 // post.js takes ownership of the tonemap and switches the renderer's off; without post there is
 // no tonemap at all, which made raw debug shots read far darker than the pipeline they diagnose.

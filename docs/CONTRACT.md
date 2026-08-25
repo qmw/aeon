@@ -111,3 +111,11 @@ translucent smears and wave crests into streaks in every phase-3 capture.
 `window.__fps` is honest wall-clock fps (software rasteriser; a real GPU is orders of magnitude faster).
 Keep scene triangles under ~1.5M and the post chain lean, but do NOT sacrifice image quality for
 swiftshader fps — the target platform is a real GPU.
+
+## Debug flags (src/main.js)
+- `?nopost=1` — render the raw scene with post disabled. Fastest way to tell a shading bug from a post bug.
+- `?time=0.35` — force the sun angle (0 = midnight, 0.25 sunrise, 0.5 noon, 0.75 sunset).
+- `?cam=x,y,z,tx,ty,tz` — park the camera at a position looking at a target and freeze input.
+  Units are ~40px tall at gameplay zoom; use this to shoot a close-up of what you are editing, e.g.
+  `node tools/shot.mjs shots/closeup.png 900 600 1000 "http://localhost:5173/?cam=62,8,86,60,2,76"`
+  Always check the gameplay-zoom frame too — a unit that reads at 3 metres still has to read at 40px.
