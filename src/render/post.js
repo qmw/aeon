@@ -781,7 +781,12 @@ const PresentShader = {
     uRes: { value: new THREE.Vector2(1600, 900) },
     uProj: { value: new THREE.Vector2(1, 1) },
     uNear: { value: 0.5 }, uFar: { value: 1200 }, uCamY: { value: 20 },
-    uSharp: { value: 0.34 }, uFrame: { value: 0 }, uDetail: { value: 0.30 },
+    // uDetail 0.25, not 0.30: it is an 8 px MID-band amplifier running at full strength over
+    // the near field, and the near field is the one region whose blob-to-grain ratio is over
+    // the ceiling (1.35 against 1.3) while its pixel band is already at ITS ceiling. 8 px is
+    // grain-adjacent anyway; the structure a player reads now comes from the terrain's own
+    // 4-6 u macro band, which is four octaves coarser and free in both measured bands.
+    uSharp: { value: 0.34 }, uFrame: { value: 0 }, uDetail: { value: 0.25 },
     // strength of the chroma-only 1px low-pass at the end of the pass (luma is never touched)
     uChroma: { value: 0.62 },
     // radius 0.8px, luminance only, and soft-thresholded: the deadzone is what makes it an
@@ -831,7 +836,12 @@ const PresentShader = {
     // 0.34, not 0.10. The note this replaces was true when far land measured 12-13 HF_rms
     // against a gate floor of 12; with the toe restored the far cliff measures 15-16 and the
     // near/far ramp is the failure that matters, so the far band can and must give some back.
-    uCutHF: { value: 0.34 },
+    // 0.46, not 0.34. The near/far HF ramp is the gate failure that survives everything else
+    // (1.55 against a 1.6 floor) and the near band has no room left — it sits at 22.6 against a
+    // ceiling of 22. So the ramp has to be bought at the FAR end, and this is the operator that
+    // owns it: the far cliff's pixel band comes off 14.6 -> ~12.6 (the floor is 12) while the
+    // near field, which rides flatK's 0.16 floor, loses ~2%.
+    uCutHF: { value: 0.46 },
     // A NEAR-ONLY pixel-band cut, and yes that is the opposite slope to a mip. It is not a mip:
     // it is a de-peppering pass for the vegetation impostors the ground scatter aliases into
     // under the camera, which is where they live and where they measured 4.26% of pixels more

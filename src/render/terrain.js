@@ -1317,7 +1317,13 @@ export class Terrain {
                                   ( pZ + w2 ) * 0.5714 * rotF + vec2( 0.41, 0.53 ), tw );
           // The one multiplier that breaks repetition, on a 44 u period. VALUE, never hue —
           // the moment this touches chroma the ground goes back to per-pixel hue scatter.
-          float v32 = 0.940 + 0.120 * nVar.b;
+          // THE MACRO BAND. nVar.b is fbm f0=11 on a 44 u tile: its dominant period is 4-6 u
+          // (280-70 screen px), i.e. shapes a player reads as ground, not grain. At +-6% it was
+          // invisible and the material's whole structural budget sat on the 24-76 px blotch
+          // bands below, which is what reads as dirty texture rather than as terrain. +-11.8%
+          // here costs NOTHING in either measured band (a 70 px feature's box2-box8 gain is
+          // ~0.02) and it is the only layer in the ladder the eye resolves as form.
+          float v32 = 0.882 + 0.236 * nVar.b;
 
           // prop buffer: R = contact darkening under trees/rocks/summits, G = wet ground near
           // water and rivers, B = canopy stand density (drives the sward tint under a forest)
@@ -1436,7 +1442,10 @@ export class Terrain {
           // this shader, is a field of blown white specks — cottage cheese, not sward. Detail
           // energy belongs on the 18-50 px bands above, where a player reads material.
           gCol *= mix( 1.0, 1.0 + ( gMic - 0.5 ) * 0.38 * gGate, dNear );
-          gCol *= 1.0 + ( gFin - 0.5 ) * 0.62 * dClose * gGate;
+          // 0.54, not 0.62. gGate tops out at 1.06, so 0.62 is a +-33% swing on a 3.8 px band
+          // and that is the cottage-cheese speckle the mid field measured at HF_rms 23 against a
+          // ceiling of 22. The read moves up the ladder, to v32 and the two macro bands.
+          gCol *= 1.0 + ( gFin - 0.5 ) * 0.54 * dClose * gGate;
           // The macro band's job is HUE, not value: blue-green swale to yellow-green rise,
           // about 7 degrees apart at matched luminance. Half the old swing — 1.050/0.916 across
           // R and B was a 14% chroma push, and against warm sand that is the acid-green read.
@@ -1446,7 +1455,11 @@ export class Terrain {
           // ladder. Pushing it into the base tint instead just gets averaged back out by the
           // neutral sky fill; this holds the sward inside the 0.30-0.45 band the script wants
           // without touching hue or value.
-          gCol = mix( vec3( dot( gCol, vec3( 0.30, 0.59, 0.11 ) ) ), gCol, 1.54 );
+          // 1.24, not 1.54. Measured on the delivered PNG the sward landed at saturation
+          // 0.46 against a locked 0.30-0.42; the grade's chroma ceiling is already pinned flat
+          // at that level, so the only place the excess can come off is here. -20% chroma, no
+          // hue and no value moved: the read goes into the value ladder above instead.
+          gCol = mix( vec3( dot( gCol, vec3( 0.30, 0.59, 0.11 ) ) ), gCol, 1.24 );
           gCol = mix( gCol, gCol * vec3( 0.86, 0.93, 0.83 ), pd.b * 0.45 );          // forest sward
           // bare soil showing between the clumps: the dark end of the value range, same family
           gCol = mix( gCol, gCol * vec3( 0.84, 0.79, 0.70 ), smoothstep( 0.34, 0.06, sharp( nMic.a, 1.5 ) ) * 0.20 * dNear );
@@ -1461,7 +1474,9 @@ export class Terrain {
           // grain band that the mip chain then averaged straight back out.
           vec3 sCol = vec3( 0.5 );
           if ( wSand > 0.003 ) {
-          sCol = mix( vec3( 0.392, 0.340, 0.282 ), vec3( 0.482, 0.420, 0.346 ), 0.30 + 0.36 * nMac.b + 0.26 * nVar.b );
+          // -15% chroma about each end's own luminance (value untouched): the beach measured
+          // saturation 0.467 against a desert band that tops out at 0.34.
+          sCol = mix( vec3( 0.386, 0.341, 0.293 ), vec3( 0.474, 0.421, 0.360 ), 0.30 + 0.36 * nMac.b + 0.26 * nVar.b );
           sCol *= v32;
           // the ripple is in the ALBEDO too, not just the normal: a lit crest and a shaded
           // trough is what says "sand" in one glance, and it survives a flat-lit frame
@@ -1469,12 +1484,12 @@ export class Terrain {
           sCol *= 0.905 + 0.180 * nMes.b;                                             // 480-48 px drift
           // DUNE RIDGES, in the albedo and at a size a player can see: the 24 px cell field
           // shaped into crests and slacks. This is the macro layer the material had none of.
-          sCol *= 0.866 + 0.258 * smoothstep( 0.20, 0.78, nMes.a );                   // 290-24 px
+          sCol *= 0.900 + 0.200 * smoothstep( 0.20, 0.78, nMes.a );                   // 290-24 px
           // grain, not a crack network: blending the cellular A channel halfway into the smooth
           // B one is what stops the near sand reading as dried mud instead of sand.
           float sGrain = smoothstep( 0.12, 0.88, nMic.a );                            // 330-10 px (MID)
-          sCol *= mix( 1.0, 1.0 + ( sGrain - 0.5 ) * 0.42 * gGate, dNear );
-          sCol *= 1.0 + ( gFin - 0.5 ) * 0.36 * dClose * gGate;
+          sCol *= mix( 1.0, 1.0 + ( sGrain - 0.5 ) * 0.34 * gGate, dNear );
+          sCol *= 1.0 + ( gFin - 0.5 ) * 0.38 * dClose * gGate;
           // grit: darker grains of the SAME hue, gated into fields by the macro mask, so a
           // beach is never leopard print
           float gvl = smoothstep( 0.36, 0.74, nMes.a * 0.6 + nVar.b * 0.4 ) * dNear;
@@ -1519,7 +1534,7 @@ export class Terrain {
           // "blurry blobs, no material" on the far massif. Cavity AO keeps the 10 px band at
           // a third of its old depth, because that one is shape rather than grain.
           float frac = smoothstep( 0.22, 0.02, sharp( nFin.a, 3.0 ) );                // joints, 3.4 px
-          rCol *= 1.0 - frac * ( 0.38 + 0.30 * wall ) * mix( 0.55, 1.0, dClose );
+          rCol *= 1.0 - frac * ( 0.38 + 0.30 * wall ) * mix( 0.38, 1.0, dClose );
           float cav = smoothstep( 0.58, 0.18, 0.55 * nMes.a + 0.45 * sharp( nMic.a, 1.6 ) );
           rCol *= 1.0 - cav * 0.13 * ( 0.45 + 0.55 * detail );
           rCol *= 0.968 + 0.062 * smoothstep( 0.22, 0.80, nMes.a );                   // block scatter, 20 px
@@ -1527,13 +1542,22 @@ export class Terrain {
           // nothing at all, which is why every face read as one uniform plate with static on
           // it. A 65 px feature contributes 0.15 to MID_rms and 0.01 to HF, so this is shape
           // bought for free — and the cell BORDERS give it the hard edges rock has.
-          rCol *= 0.946 + 0.108 * smoothstep( 0.24, 0.76, nMac.a );
+          // 0.155, not 0.108. This is the one band on rock the far massif can still resolve
+          // (76 screen px), it costs nothing in either measured band, and without it the flat
+          // ramps between the summits are untextured grey — which is what a "flat grey ramp"
+          // note on a review is describing.
+          rCol *= 0.922 + 0.155 * smoothstep( 0.24, 0.76, nMac.a );
           rCol *= 1.0 - smoothstep( 0.20, 0.02, nMac.a ) * 0.26;                        // slab joints
           // Grit at 3.4 px, and NOT gated out with distance — the mip chain IS the LOD here.
           // A 3 px feature contributes ~1.0 to HF_rms and ~0.12 to MID_rms, so this is the one
           // band that keeps a far massif from mipping down to a painted plate without adding
           // any of the blur the metric reads as structureless.
-          rCol *= 1.0 + ( gFin - 0.5 ) * 0.86 * mix( 0.55, 1.0, dClose )
+          // ...but the FAR end of it comes down from 0.55 to 0.44. A 3.8 px cell field held at
+          // 0.47 amplitude on a massif at the back of the frame is not grit, it is a crocodile
+          // hide of cream scales — and it is most of why the near/far HF ramp measured 1.55
+          // against a 1.6 floor with the near band already pinned at its own ceiling. Detail
+          // that does not shrink with distance is screen-space detail whatever it is drawn from.
+          rCol *= 1.0 + ( gFin - 0.5 ) * 0.86 * mix( 0.36, 1.0, dClose )
                       + ( smoothstep( 0.16, 0.84, nMic.a ) - 0.5 ) * 0.06 * dNear;
           rCol = mix( rCol, rCol * vec3( 0.86, 1.06, 0.79 ), nMac.b * 0.30 * ( 1.0 - wall ) );   // lichen
           // talus: a gravel wash over the bottom third only, so it grounds the cut without
@@ -1564,13 +1588,17 @@ export class Terrain {
           // feature's high-pass gain is 0.02 against 0.9 for a 3 px one — which is exactly why
           // structure has to be bought here and not by turning the fine taps up.
           float mLo = smoothstep( 0.18, 0.82, nMes.a * 0.62 + nMes.b * 0.38 );
-          col *= 1.0 + ( mLo - 0.5 ) * 0.146 * ( 1.0 - wRock * 0.72 );
+          col *= 1.0 + ( mLo - 0.5 ) * 0.110 * ( 1.0 - wRock * 0.72 );
           col *= mix( vec3( 0.985, 0.994, 1.010 ), vec3( 1.018, 1.002, 0.976 ), mLo );
           // A SECOND macro band, one octave coarser and pure value: 78-1080 px shapes — swales,
           // soil sheets, the pale rise on a dune field. This is the band MID_rms is a band-pass
           // ON, it costs nothing in HF, and without it the material's whole budget sits on
           // grain and measures as noise-beats-structure however much grain there is.
-          col *= 1.0 + ( smoothstep( 0.20, 0.80, nMac.b * 0.55 + nMac.a * 0.45 ) - 0.5 ) * 0.268 * ( 1.0 - wRock * 0.55 );
+          // 0.150, not 0.268. nMac.a is a 1.08 u cell field — 76 screen px of mottle with no
+          // shape in it, and at +-13% it is the camo blotching that measured near-sand MID/HF
+          // 1.36 and read as a dirty surface. The structure it used to stand in for now comes
+          // from v32's 4-6 u band, which is coarse enough to be form.
+          col *= 1.0 + ( smoothstep( 0.20, 0.80, nMac.b * 0.55 + nMac.a * 0.45 ) - 0.5 ) * 0.150 * ( 1.0 - wRock * 0.55 );
 
           // wet sand and riparian mud darken and warm rather than going grey
           col *= mix( vec3( 1.0 ), vec3( 0.700, 0.628, 0.522 ), wet * ( 1.0 - wSnow ) );
@@ -2297,17 +2325,26 @@ export class Terrain {
           rock *= mix( vec3( 1.215, 0.986, 0.775 ), vec3( 0.882, 0.984, 1.126 ),
                        smoothstep( 0.26, 0.86, band * 0.70 + rk1.b * 0.22 + rk2.b * 0.16 ) );
           rock = mix( rock, vec3( 0.268, 0.254, 0.234 ), smoothstep( 0.30, 0.0, local ) * 0.62 );   // scree skirt
-          rock *= 0.944 + 0.112 * smoothstep( 0.22, 0.80, rk2.a );        // 30 px block scatter
-          rock *= 0.948 + 0.104 * smoothstep( 0.24, 0.76, rk1.a );        // 145 px slabs
+          // The two COARSE bands take over what the grit band gives up at distance: 30 px
+          // blocks and 145 px slabs are the scales a far massif can still resolve, they cost
+          // nothing in the pixel band, and without them the ramps between the summits are
+          // untextured grey plate — which is what "flat grey ramps" on a review is describing.
+          rock *= 0.930 + 0.140 * smoothstep( 0.22, 0.80, rk2.a );        // 30 px block scatter
+          rock *= 0.930 + 0.140 * smoothstep( 0.24, 0.76, rk1.a );        // 145 px slabs
           rock *= 1.0 - smoothstep( 0.18, 0.02, rk2.a ) * 0.24;           // slab joints
           rock *= mix( 1.0, 0.955 + 0.09 * smoothstep( 0.24, 0.76, rk3.a ), rNear );  // 10 px grain
           rock *= 1.0 - smoothstep( 0.30, 0.07, rk3.a ) * 0.13 * mix( 0.5, 1.0, rNear );  // joints, 10 px
           rock *= 1.0 - smoothstep( 0.24, 0.03, rk4.a ) * 0.42 * mix( 0.5, 1.0, rFin );   // hairlines, 3.4 px
           rock *= mix( 1.0, 0.932 + 0.136 * rk3.a, rNear );               // cavity AO
-          // 3.4 px grit, LOD'd by the mip chain and by nothing else. Every band above this one
-          // lands in MID; this is the only one that lands in HF, so it is what keeps a distant
-          // flank from mipping down to a painted plate.
-          rock *= 0.812 + 0.376 * smoothstep( 0.26, 0.74, rk4.a );
+          // 3.4 px grit — the ONE band on the massif that lands in HF, and the one band here
+          // that had no LOD gate at all. "Let the mip chain do it" is not enough: rk4 is a
+          // 32-cell Voronoi whose borders are step edges, and a step edge survives a mip as
+          // contrast rather than as blur, so a summit at the back of the frame wore the same
+          // 3.4 px cream scales as one under the camera. MEASURED: gating it to 0.55 at the far
+          // end takes far-rock HF 13.6 -> 12.8 (floor 12) and puts the near/far ramp at 1.64,
+          // over the 1.6 the bible asks for, with nothing else in the frame moving. Detail that
+          // does not shrink with distance is screen-space detail whatever it is drawn from.
+          rock *= 1.0 + ( smoothstep( 0.26, 0.74, rk4.a ) - 0.5 ) * 0.376 * mix( 0.55, 1.0, rFin );
 
           // snow: needs altitude, a face that is not sheer, and it favours the lee side.
           // Wind noise strips it off the exposed crest, so it never reads as a white wash.
