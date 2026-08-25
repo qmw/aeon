@@ -5,7 +5,7 @@ no external art: every texture, mesh, shader and icon is generated in code at lo
 
 **[Play it](https://qmw.github.io/aeon/)** · MIT licensed
 
-![AEON](shots/p7-state.png)
+![AEON](shots/final-hero.png)
 
 ## What's in it
 
@@ -70,6 +70,30 @@ generated a long run of bogus "the near field is blurry" critiques before anyone
 
 ## Status
 
-Playable and complete as a game loop; the renderer is still short of its target. Blind judging still
-picks real Civilization VI, and the outstanding defects are listed in `docs/RESUME.md`. Contributions
-welcome — the art bible and the metric gate are the two things to read first.
+The **game** is done: a full match plays start to finish, the 260-turn headless simulation passes
+every invariant, and `npx vite build` ships a static bundle.
+
+The **renderer** is not. A referee agent scores the frame against a real Civilization VI screenshot
+on six independent axes; the current frame stands at **49/100**:
+
+| lighting | material | readability | units | colour | finish | total |
+|---|---|---|---|---|---|---|
+| 18/30 | 9/20 | 8/15 | **3/15** | 6/10 | 5/10 | **49/100** |
+
+Honestly stated: blind judging still picks the real Civ VI immediately. Units are the worst of it —
+close up they resolve into soldiers, but at the distance you actually play at an occupied tile is a
+strength badge and a contact ring over a mound, and the silhouette names nothing. Ground material is screen-space rather than world-space, so detail does not shrink with
+distance. The hex grid still vanishes on mountain tiles, which breaks the art bible's first
+non-negotiable. Rivers read as flat cyan cutouts. The objective gate agrees: `tools/metrics.mjs` on
+the shipped frame still fails, with the near/far detail ramp at 1.40 against a 1.6 target. All six
+defects are written up in priority order, with the measurements behind them, in `docs/RESUME.md`.
+
+Nine phases in, the whole-frame score went 61 → 34 → 22 under parallel agents, then climbed to 50
+under sequential single-owner passes with a revert gate; the six-axis rubric above re-scored that same
+frame at 49, and the latest phase then reverted all six of its attempts. The most useful thing in this
+repo may be that record: `docs/RESUME.md` documents which gate designs ratcheted and which stalled —
+including one so strict it threw away the best frame the project ever rendered over a single point on
+a single axis.
+
+Contributions welcome — `docs/ART-BIBLE.md` (the locked direction) and `tools/metrics.mjs` (the
+objective gate) are the two things to read first.
