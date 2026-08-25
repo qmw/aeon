@@ -539,7 +539,10 @@ function iconGeometry(kind) {
 // is the "field of flat shards" the massif read as. One mass per hex, all within 1.4x of each
 // other, so neighbours MERGE at the feet into a range instead of cutting through each other.
 function peakGeometry(v) {
-  const pos = [], col = [], idx = [], ANG = 32, RINGS = 12;
+  // RIM is the ring at rr = 1; the last two rings run PAST it, flaring out and dropping below
+  // it, so the mass is seated in the hex field on a continuous cone instead of ending on a
+  // horizontal plate that the field can graze.
+  const pos = [], col = [], idx = [], ANG = 40, RIM = 15, RINGS = RIM + 2;
   const spurs = 3 + (v % 3);
   const phase = v * 1.7, lean = (hash2(v, 1, 8123) - 0.5) * 0.34;
   const apex = pos.length / 3;
@@ -547,7 +550,15 @@ function peakGeometry(v) {
   const rows = [];
   let maxR = 0;   // MEAN rim radius: normalising by it makes the instance scale the world radius
   for (let j = 0; j < RINGS; j++) {
-    const rr = 0.055 + (j / (RINGS - 1)) * 0.945;
+    const rr = 0.055 + (j / (RIM - 1)) * 0.945;
+    const rc = Math.min(1, rr);      // the tapers all key on the rim, not on the flare past it
+    // The jitter field is 11 RADIAL BANDS, not one per ring, and it is interpolated between
+    // them the same way it already was around the circle. Keying it on the ring index instead
+    // tied the landform to the tessellation: adding rings re-rolled every silhouette, and each
+    // band edge was a crease, which is the "long straight creases running across the form" and
+    // the flat shard planes between them. Same mountains as before, described by more triangles.
+    const fb = ((rc - 0.055) / 0.945) * 11, b0 = Math.min(10, Math.floor(fb));
+    const bf = fb - b0, bu = bf * bf * (3 - 2 * bf);
     const row = [];
     for (let i = 0; i < ANG; i++) {
       const a = (i / ANG) * Math.PI * 2;
@@ -560,8 +571,16 @@ function peakGeometry(v) {
       // was in the GEOMETRY, not in any projection. Seven lobes, smoothstep-interpolated: real
       // spurs and gullies at a scale the eye reads as landform.
       const fa = i / ANG * 7, k0 = Math.floor(fa), kf = fa - k0, ku = kf * kf * (3 - 2 * kf);
-      const jit = (k, sd) => hash2(((k % 7) + 7) % 7, j + v * 13, sd);
-      const n1 = 0.84 + 0.32 * (jit(k0, 4177) * (1 - ku) + jit(k0 + 1, 4177) * ku);
+      const jit = (k, sd) => {
+        const kk = ((k % 7) + 7) % 7;
+        return hash2(kk, b0 + v * 13, sd) * (1 - bu) + hash2(kk, b0 + 1 + v * 13, sd) * bu;
+      };
+      const n1r = 0.84 + 0.32 * (jit(k0, 4177) * (1 - ku) + jit(k0 + 1, 4177) * ku);
+      // and its amplitude TAPERS OUT toward the rim. At full strength the mesh meets the hex
+      // field on a zigzag polyline, so the line where the two surfaces cross snaps to whole
+      // triangles and comes back as notches; rounded, the foot crosses on a curve. The crest
+      // keeps every arete — the taper is 1.0 at the apex.
+      const n1 = 1.0 + (n1r - 1.0) * (0.52 + 0.48 * (1 - rc));
       const n2 = 0.91 + 0.18 * (jit(k0, 5231) * (1 - ku) + jit(k0 + 1, 5231) * ku);
       // BEDDING, in the radius rather than the height. Snapping height collapses whole rings
       // onto one bench and the flank goes flat-shaded; a 6% radius wave at ~7 beds up the loft
@@ -571,30 +590,38 @@ function peakGeometry(v) {
       // hex-sized mass either overhangs its neighbours at the points or leaves bare plate in
       // the notches. Tapered out toward the rim, the foot comes back round and fills the hex
       // while the crest keeps every arete and gully it had.
-      const sps = sp * (0.42 + 0.58 * (1 - rr));
-      const rad = rr * (0.72 + 0.48 * sps) * n1 * (1 + 0.075 * Math.cos((1 - rr) * 15.7 + v * 1.9));
+      const sps = sp * (0.42 + 0.58 * (1 - rc));
+      const rad = rr * (0.72 + 0.48 * sps) * n1 * (1 + 0.075 * Math.cos((1 - rc) * 15.7 + v * 1.9));
       // Straight along an arete, concave down a gully: the exponent difference IS the peak.
       // (Under 1.0 the profile inverts — blunt apex, cliff rim — and a hex of that is a bread
       // roll, which is what a tray of them read as.)
-      const h = Math.pow(1 - rr, 1.02 + 0.86 * (1 - sp)) * n2;
-      if (j === RINGS - 1) maxR += rad / ANG;
+      // A LOFT MUST NOT GRAZE THE GROUND IT STANDS IN. pow(1-rr, e) with e > 1 reaches the rim
+      // with ZERO slope, so the outer fifth of the mesh is a near-horizontal plate lying within
+      // centimetres of the hex field, and which of the two surfaces is on top is then decided
+      // by millimetres of terrain relief — a decision that snaps to whole triangles. That is
+      // the row of hard isoceles notches ("crocodile teeth") along the ridge lips this frame
+      // was rejected on: not a modelling defect in the mountain, a tangency between two
+      // surfaces. Sliding the power off its own zero gives every profile a real angle where it
+      // enters the ground — the mass cuts in instead of skimming. Both ends are pinned, so the
+      // silhouette above the rim is unchanged. Past the rim the two flare rings keep going,
+      // out and down, so the foot buries itself in the field instead of lying on it.
+      const ex = 1.02 + 0.86 * (1 - sp), FT = 0.08, f0 = Math.pow(FT, ex);
+      const h = (Math.pow(Math.max(0, 1 - rr + FT), ex) - f0) / (Math.pow(1 + FT, ex) - f0) * n2
+              - Math.max(0, rr - 1) * 1.10;   // and the flare digs in, on any profile
+      if (j === RIM - 1) maxR += rad / ANG;
       row.push(pos.length / 3);
-      pos.push(Math.cos(a) * rad + lean * (1 - rr), h, Math.sin(a) * rad + lean * 0.6 * (1 - rr));
+      pos.push(Math.cos(a) * rad + lean * (1 - rc), h, Math.sin(a) * rad + lean * 0.6 * (1 - rc));
       const g = 0.46 + 0.24 * h * (0.62 + 0.44 * sp);
       col.push(g, g * 0.99, g * 0.965);
     }
     rows.push(row);
   }
-  // buried skirt: a curtain hanging 0.55 below the rim, so however the hex field falls away
-  // under the foot there is never a lit sliver of background between the mass and the ground
-  const last = rows[RINGS - 1], skirt = [];
-  for (let i = 0; i < ANG; i++) {
-    const k = last[i] * 3;
-    skirt.push(pos.length / 3);
-    pos.push(pos[k], -0.55, pos[k + 2]);
-    col.push(0.34, 0.335, 0.325);
-  }
-  rows.push(skirt);
+  // NO SKIRT. The vertical curtain that used to hang off the rim was half of the rejected
+  // frame's notches on its own: the flank arrives at the rim horizontally and the curtain left
+  // it vertically, so computeVertexNormals handed the rim a normal that is the average of the
+  // two and every quad of that strip split into one triangle shading up and one shading out.
+  // The flare rings above replace it — same job, one continuous surface, no crease. The open
+  // foot is never visible from a board camera; you would have to get under the rim to see it.
   // unit MEAN footprint: after this the instance scale IS the mass's mean world radius, and
   // only the spur lobes reach past it (x1.26 at the widest)
   for (let i = 0; i < pos.length; i += 3) { pos[i] /= maxR; pos[i + 2] /= maxR; }
@@ -989,7 +1016,14 @@ export class Terrain {
       // The massif branch's 2.4 u swell is sampled four times per period and rolls across the
       // seam instead, so a bench reads as ground with a slope on it.
       const ridged = (t.biome === 'mountain' || t.biome === 'snow' || surfY[i] > this.maxH * 0.42) ? 1 : 0;
-      const amp = t.height > 0 ? (ridged ? 0.07 + 0.40 * rgh : 0.06 + 0.55 * rgh) : 0.05;
+      // ...and it is BOUNDED BY THE SUMMIT'S BURIAL. The field's crags reach 0.72*amp above the
+      // corner-interpolated surface; the mass standing in the same hex is seated 0.55 below its
+      // lowest welded corner. When the first number wins, the field punches up THROUGH the loft
+      // and the camera sees a row of hard dark triangles — the hex fan's own facets — cut into
+      // the lit rock. That is the "crocodile teeth" this frame was rejected on, and it was never
+      // in the mountain mesh: it is two surfaces fighting over the same 20 cm. 0.32 keeps the
+      // crags (0.27) inside the burial with room to spare.
+      const amp = t.height > 0 ? (ridged ? 0.06 + 0.32 * rgh : 0.06 + 0.55 * rgh) : 0.05;
 
       let cySum = 0;
       for (let k = 0; k < 6; k++) {
@@ -1822,7 +1856,7 @@ export class Terrain {
         // over one hex — enough that neighbours meet and weld low on the flanks, little enough
         // that the peak belongs to one tile and grid.js's seam is only ~0.4 u under rock at
         // the rim instead of the 1.14 u it used to be.
-        const rad = 1.28 + 0.14 * h1;
+        const rad = 1.34 + 0.15 * h1;
         const stretch = 0.86 + 0.36 * h3 * h3;   // some summits pull out along the contour
         // seat on the lowest welded corner and give the mass that drop back as height, so a
         // summit on a shelving tile grows taller instead of opening a gap on its low side
@@ -1833,13 +1867,13 @@ export class Terrain {
         // only jitters +-40% per tile: a per-tile hash cubed put a 3x step between two touching
         // masses, which is a bed of nails however well each one is modelled
         const hgt = Math.min(3.4, (0.85 + 1.85 * h2 * h2) * (0.58 + 0.88 * alt)
-          * (0.72 + 0.60 * prom) * swell) + Math.min(1.1, rise) * 0.80;
+          * (0.72 + 0.60 * prom) * swell) + Math.min(1.1, rise) * 0.80 + 0.50;
         // yaw is negated: a +Y rotation carries local +X to (cos, 0, -sin)
-        ridges.push(p.x + (h1 - 0.5) * 0.12, foot - 0.05, p.z + (h3 - 0.5) * 0.12,
+        ridges.push(p.x + (h1 - 0.5) * 0.12, foot - 0.55, p.z + (h3 - 0.5) * 0.12,
           rad * stretch, hgt, rad / stretch,
           -theta + (h3 - 0.5) * 0.7, (h1 - 0.5) * 0.10, h2, i);
         this.cullR[i] = Math.max(this.cullR[i], 3.2 + hgt);
-        this._stamp(p.x, p.z, rad * stretch, 0.40, 0, 1.5);
+        this._stamp(p.x, p.z, rad * stretch * 1.15, 0.38, 0, 2.4);
       }
 
       // ---- boulders on hills and bare high ground
@@ -2254,7 +2288,10 @@ export class Terrain {
         .replace('#include <project_vertex>', /* glsl */`
           #ifdef USE_INSTANCING
             vRWP = ( modelMatrix * instanceMatrix * vec4( transformed, 1.0 ) ).xyz;
-            vRWN = normalize( mat3( modelMatrix ) * mat3( instanceMatrix ) * objectNormal );
+            vec3 iSc = vec3( length( instanceMatrix[ 0 ].xyz ), length( instanceMatrix[ 1 ].xyz ),
+                             length( instanceMatrix[ 2 ].xyz ) );
+            vRWN = normalize( mat3( modelMatrix ) * mat3( instanceMatrix )
+                              * ( objectNormal / max( iSc * iSc, vec3( 1e-6 ) ) ) );
             vRY = clamp( position.y, 0.0, 1.0 );
           #else
             vRWP = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;
@@ -2381,7 +2418,7 @@ export class Terrain {
           // mesh is most of what the camera sees of it, and a 0.54 mix to one flat pale colour
           // over all of that is the washed-out tan plate the range read as. It is a skirt, not
           // a coat: 0.16 keeps it on the talus where the fan actually is.
-          rock = mix( rock, vec3( 0.3426, 0.3103, 0.2673 ), smoothstep( 0.16, 0.0, local ) * 0.42 );  // scree skirt
+          rock = mix( rock, vec3( 0.3426, 0.3103, 0.2673 ), smoothstep( 0.23, 0.0, local ) * 0.49 );  // scree skirt
           // The two COARSE bands take over what the grit band gives up at distance: 30 px
           // blocks and 145 px slabs are the scales a far massif can still resolve, and they
           // cost ~0.01 HF each. Without them the ramps between the summits are untextured plate.
@@ -2396,7 +2433,6 @@ export class Terrain {
           // lands in MID; this is the only one that lands in HF, so it is what keeps a distant
           // flank from mipping down to a painted plate.
           rock *= 1.0 + ( smoothstep( 0.26, 0.74, rk4.a ) - 0.5 ) * 0.376 * mix( 0.22, 1.0, rFin );
-
           // snow: needs altitude, a face that is not sheer, and it favours the lee side.
           // Wind noise strips it off the exposed crest, so it never reads as a white wash.
           float lee = 0.78 + 0.22 * clamp( -dot( normalize( rN.xz + vec2( 1e-4 ) ), vec2( 0.80, 0.60 ) ), -1.0, 1.0 );
@@ -2428,7 +2464,6 @@ export class Terrain {
           snowC *= ( 0.94 + 0.11 * rk1.b ) * mix( 1.0, 0.935 + 0.13 * rk4.a, rFin );   // crust, 3.4 px
           // snow replaces the instance tint instead of being multiplied by it, or a dark
           // boulder ends up with grey snow on top
-          rock = mix( vec3( dot( rock, vec3( 0.2126, 0.7152, 0.0722 ) ) ), rock, 1.06 );
           diffuseColor.rgb = mix( diffuseColor.rgb * rock * 2.85, snowC, snowAmt );
           float rspec = ( 0.055 + 0.11 * snowAmt ) * ( 0.45 + 1.1 * rk4.a );  // sparkle, not gloss`)
         .replace('#include <normal_fragment_maps>', 'normal = normalize( mat3( viewMatrix ) * rN );')
