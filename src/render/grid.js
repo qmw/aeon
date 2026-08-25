@@ -86,8 +86,9 @@ attribute float aBias;    // EXTRA depth bias, for tiles with rock standing on t
 uniform sampler2D uState;
 uniform float uFar, uBias;
 varying vec2 vL; varying vec4 vS; varying vec3 vP; varying vec2 vT;
-varying float vFade; varying float vD; varying float vWet;
+varying float vFade; varying float vD; varying float vWet; varying float vRock;
 void main() {
+  vRock = step(0.01, aBias);
   vL = aLocal; vT = aTile;
   vS = texture2D(uState, aTile);
   vWet = step(aFade, 0.0);
@@ -113,7 +114,7 @@ void main() {
 const FRAG = /* glsl */`
 precision highp float;
 varying vec2 vL; varying vec4 vS; varying vec3 vP; varying vec2 vT;
-varying float vFade; varying float vD; varying float vWet;
+varying float vFade; varying float vD; varying float vWet; varying float vRock;
 uniform sampler2D uState;
 uniform float uGrid, uDist, uDim, uCurR, uTime;
 uniform vec3 uSun; uniform vec2 uCursor, uStep;
@@ -318,7 +319,12 @@ void main() {
     // warm rock, leaves a residue that is almost pure blue. Measured: the surviving strokes over
     // the mountains came back navy. Same luminance (0.360), warm side of neutral, so the line is
     // ink on the ground everywhere instead of ink on grass and a blue wire on rock.
-    vec3 seamK = vec3(0.400, 0.355, 0.310);
+    // ...and the multiply has to be sized to the VALUE UNDER IT. 0.400 on lit sand at L 0.55
+    // is a 0.33 drop; the same 0.400 on shaded rock at L 0.18 is 0.11, i.e. the stroke that
+    // reads across the board disappears on the one biome whose tiles a player most needs to
+    // count. Rock gets a deeper multiply (aBias marks it, and only rough tiles carry one)
+    // while keeping the same hue and the same single profile.
+    vec3 seamK = mix(vec3(0.400, 0.355, 0.310), vec3(0.352, 0.310, 0.268), vRock);
     MUL(seamK, (1.0 - smoothstep(1.00, 2.00, dp)) * g * mix(1.16, 0.94, lit))
   }
   // ALPHA IS NOT OPACITY HERE — it is the DECAL PROTECT MASK, and it is the other half of
@@ -560,15 +566,16 @@ export class Grid {
       // clearance over terrain.js's fbm relief, which is damped to ~0.2*amp at the rim
       const lift = 0.04 + relief * 0.02 + (rough ? 0.05 : 0);
 
-      // THE ROCK STANDS ON THE TILE THE LATTICE IS ENGRAVED INTO. terrain.js scatters its summit
-      // lofts and scree over a mountain hex rim to rim, and they are real geometry with real
-      // depth: measured (tools/_bgrid3.mjs) 53% of every visible mountain rim is occluded by
-      // them, median depth gap 1.14 u, p75 1.35. The 0.11 view-space bias below is sized to be
-      // beaten by anything a player can see standing on a hex — correct on grass, hopeless
-      // against a boulder field — so the massif came back with a broken stipple where its grid
-      // should be, which is standing reject #1 and a whole biome the player cannot count.
-      // A rough tile gets a bias sized to the props that stand on it instead.
-      const bias = rough ? 1.25 : 0;
+      // THE ROCK STANDS ON THE TILE THE LATTICE IS ENGRAVED INTO — but no longer ON ITS RIM.
+      // terrain.js used to scatter summit lofts three hexes wide, so 53% of every visible
+      // mountain rim was buried under rock and the seam needed a 1.25 view-space bias to punch
+      // through it. A bias that large draws the buried edge OVER the face in front of it, at
+      // the screen position of the thing it is hiding behind: that is the stray dark line
+      // wandering across a summit that reads as a scratch rather than as a tile boundary.
+      // Summits are now one per hex and sized to it, so the rim carries ~0.4 u of rock instead
+      // of 1.14: the stroke lands on the mass's own shoulder, within a fifth of a hex of the
+      // edge it marks, and reads as a joint in the rock rather than a wire across the face.
+      const bias = rough ? 0.60 : 0;
 
       const key = ((t.q / CH_Q) | 0) * 64 + ((t.r / CH_R) | 0);
       let ch = chunks.get(key);
