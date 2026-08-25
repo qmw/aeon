@@ -2312,18 +2312,27 @@ export class Terrain {
           // Same measured move as the surface shader's rCol: chroma 0.40 (the desert axis)
           // down to 0.225 with every end's luminance held, so the massif stops sharing the
           // sand's tint and lands next to #7A7368 instead.
-          vec3 rock = mix( vec3( 0.199, 0.180, 0.154 ), vec3( 0.544, 0.492, 0.421 ),
+          // ...and back UP, to chroma 0.40: at 0.225 the massif measured saturation 0.259
+          // against the bible's 0.28 floor and read as chalk — geology carried by value alone.
+          // A pure chroma scale about each end's OWN luminance, so hue (34.6) and both
+          // luminances are unchanged to the digit and the lift lands on the whole family at
+          // once, never on a band. Strata stay VALUE (the band multiply below). 0.40 is the
+          // linear chroma the ground shader's rock already carries; the massif needs that at
+          // source to READ as that, because it is the surface aerial perspective bleaches.
+          vec3 rock = mix( vec3( 0.2142, 0.1781, 0.1287 ), vec3( 0.5855, 0.4867, 0.3518 ),
                            rk1.b * 0.40 + rk2.b * 0.44 + rk4.b * 0.16 );
           rock *= 0.68 + 0.62 * band;                          // strata
-          // Mineral staining block to block: iron-warm on one bed, grey-cool on the next.
-          // Chroma BETWEEN blocks, not chroma in the base, is how rock reads grey and still
-          // carries a saturation signal.
-          rock *= mix( vec3( 1.108, 0.993, 0.888 ), vec3( 0.941, 0.992, 1.063 ),
-                       smoothstep( 0.26, 0.86, band * 0.70 + rk1.b * 0.22 + rk2.b * 0.16 ) );
+          // Mineral staining, block to block — and OFF the bedding. Driven by band it painted a
+          // chroma ribbon along every bed, running across facet boundaries at unchanged
+          // saturation into the shade: a decal stain, not bedding. Strata are VALUE (the band
+          // multiply above); this is the block-to-block hue drift only, and its cool end no
+          // longer cancels the family's warmth back down to chalk.
+          rock *= mix( vec3( 1.076, 0.995, 0.925 ), vec3( 0.972, 0.996, 1.032 ),
+                       smoothstep( 0.28, 0.82, rk1.b * 0.56 + rk2.b * 0.44 ) );
           // scree skirt, LIFTED: 0.268 under a shadowed flank lands at luma 0.06, so the
           // floor between the summits had no value left for any band below to modulate and
           // measured as flat near-black. A scree fan is pale broken rock, not a hole.
-          rock = mix( rock, vec3( 0.330, 0.312, 0.288 ), smoothstep( 0.30, 0.0, local ) * 0.54 );   // scree skirt
+          rock = mix( rock, vec3( 0.3426, 0.3103, 0.2673 ), smoothstep( 0.30, 0.0, local ) * 0.54 );  // scree skirt
           // The two COARSE bands take over what the grit band gives up at distance: 30 px
           // blocks and 145 px slabs are the scales a far massif can still resolve, and they
           // cost ~0.01 HF each. Without them the ramps between the summits are untextured plate.
