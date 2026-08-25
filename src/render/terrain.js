@@ -1441,11 +1441,11 @@ export class Terrain {
           // whole near field, and 35% on a 6 px band, SQUARED by the gamma-2 lift at the end of
           // this shader, is a field of blown white specks — cottage cheese, not sward. Detail
           // energy belongs on the 18-50 px bands above, where a player reads material.
-          gCol *= mix( 1.0, 1.0 + ( gMic - 0.5 ) * 0.38 * gGate, dNear );
+          gCol *= mix( 1.0, 1.0 + ( gMic - 0.5 ) * 0.34 * gGate, dNear );
           // 0.54, not 0.62. gGate tops out at 1.06, so 0.62 is a +-33% swing on a 3.8 px band
           // and that is the cottage-cheese speckle the mid field measured at HF_rms 23 against a
           // ceiling of 22. The read moves up the ladder, to v32 and the two macro bands.
-          gCol *= 1.0 + ( gFin - 0.5 ) * 0.54 * dClose * gGate;
+          gCol *= 1.0 + ( gFin - 0.5 ) * 0.46 * dClose * gGate;
           // The macro band's job is HUE, not value: blue-green swale to yellow-green rise,
           // about 7 degrees apart at matched luminance. Half the old swing — 1.050/0.916 across
           // R and B was a 14% chroma push, and against warm sand that is the acid-green read.
@@ -1484,12 +1484,16 @@ export class Terrain {
           sCol *= 0.905 + 0.180 * nMes.b;                                             // 480-48 px drift
           // DUNE RIDGES, in the albedo and at a size a player can see: the 24 px cell field
           // shaped into crests and slacks. This is the macro layer the material had none of.
-          sCol *= 0.900 + 0.200 * smoothstep( 0.20, 0.78, nMes.a );                   // 290-24 px
+          sCol *= 0.931 + 0.138 * smoothstep( 0.20, 0.78, nMes.a );                   // 290-24 px
           // grain, not a crack network: blending the cellular A channel halfway into the smooth
           // B one is what stops the near sand reading as dried mud instead of sand.
           float sGrain = smoothstep( 0.12, 0.88, nMic.a );                            // 330-10 px (MID)
-          sCol *= mix( 1.0, 1.0 + ( sGrain - 0.5 ) * 0.34 * gGate, dNear );
-          sCol *= 1.0 + ( gFin - 0.5 ) * 0.38 * dClose * gGate;
+          // 0.24 and 0.30, not 0.34 and 0.38. Measured at 1600x900 the near sand ships HF_rms
+          // 22.5 against a ceiling of 22 and MID/HF 1.37 against 1.3, and these are its two
+          // near-only bands: sGrain is 330-10 px (all MID), gFin is 3.8 px (all HF). The MID
+          // one takes the bigger cut, which is the only way that ratio comes down.
+          sCol *= mix( 1.0, 1.0 + ( sGrain - 0.5 ) * 0.17 * gGate, dNear );
+          sCol *= 1.0 + ( gFin - 0.5 ) * 0.30 * dClose * gGate;
           // grit: darker grains of the SAME hue, gated into fields by the macro mask, so a
           // beach is never leopard print
           float gvl = smoothstep( 0.36, 0.74, nMes.a * 0.6 + nVar.b * 0.4 ) * dNear;
@@ -1588,7 +1592,7 @@ export class Terrain {
           // feature's high-pass gain is 0.02 against 0.9 for a 3 px one — which is exactly why
           // structure has to be bought here and not by turning the fine taps up.
           float mLo = smoothstep( 0.18, 0.82, nMes.a * 0.62 + nMes.b * 0.38 );
-          col *= 1.0 + ( mLo - 0.5 ) * 0.110 * ( 1.0 - wRock * 0.72 );
+          col *= 1.0 + ( mLo - 0.5 ) * 0.085 * ( 1.0 - wRock * 0.72 );
           col *= mix( vec3( 0.985, 0.994, 1.010 ), vec3( 1.018, 1.002, 0.976 ), mLo );
           // A SECOND macro band, one octave coarser and pure value: 78-1080 px shapes — swales,
           // soil sheets, the pale rise on a dune field. This is the band MID_rms is a band-pass
@@ -1653,7 +1657,15 @@ export class Terrain {
           // Only the SKY third of the fill is tinted, so the shadow hue stays inside ~8 degrees
           // of the lit hue and a shadow on tan sand is still tan.
           skyC *= mix( vec3( 0.988, 0.996, 1.020 ), vec3( 1.0 ), lit );
-          vec3 bounce = material.diffuseColor * vec3( 1.24, 1.10, 0.88 );
+          // ...and the bounce LOSES CHROMA AS IT LOSES THE SUN. material.diffuseColor is the
+          // albedo already squared into linear, so the fill is the albedo's chroma SQUARED —
+          // and in a cast shadow that fill is nearly the whole of the pixel. That is the
+          // measured "sand shadow gains saturation, 0.30 lit -> 0.54 dark": the ambient was
+          // the most saturated light on the board and it only showed where the sun did not
+          // reach. Hue does not move (it is a mix toward the fill's OWN luminance) and a lit
+          // fragment does not move at all, so this costs the frame nothing but the inversion.
+          vec3 bounce = mix( vec3( dot( material.diffuseColor, vec3( 0.2126, 0.7152, 0.0722 ) ) ),
+                             material.diffuseColor, mix( 0.68, 1.0, lit ) ) * vec3( 1.24, 1.10, 0.88 );
           // The two fills do NOT occlude the same way. Skylight still reaches a shadowed hex —
           // knock it down for the geometry that is casting, not to nothing. The ground BOUNCE
           // is second-hand sunlight, so under a cast shadow it is almost entirely gone; leaving
@@ -2278,8 +2290,17 @@ export class Terrain {
           vec4 rk2 = tri( uNoise, pX * 0.167, pY * 0.167, pZ * 0.167, tw, 0.0 );          //  210-26 px
           vec4 rk3 = tri( uDet, pX * 0.2174 + vec2( 0.37, 0.61 ), pY * 0.2174 + vec2( 0.37, 0.61 ),
                                 pZ * 0.2174 + vec2( 0.37, 0.61 ), tw, 0.0 );               // 4.6 u / 32 = 10 px
-          vec4 rk4 = tri( uDet, pX * 0.5714 + vec2( 0.19, 0.77 ), pY * 0.5714 + vec2( 0.19, 0.77 ),
-                                pZ * 0.5714 + vec2( 0.19, 0.77 ), tw, 0.0 );               // 1.75 u / 32 = 3.4 px
+          // THE FINEST TAP IS THE ONE THE REPEAT SHOWS UP IN. rk4 ran one fixed frame at a
+          // 1.75 u tile over the whole massif, so every summit wore the SAME stamped pebble
+          // field a couple of hexes apart — logged as "a visibly repeating pebble stamp on the
+          // peaks". Same fix the ground ladder already uses: a 24 u mask sweeps the frame from
+          // 37 to 113 degrees and dips the world scale 27% in between, so the tile period never
+          // survives long enough to be found. One extra fetch, no extra band.
+          float rBrk = smoothstep( 0.30, 0.70, texture2D( uNoise, pY * 0.0417 + vec2( 0.71, 0.29 ) ).b );
+          float rfA = mix( 0.799, -0.391, rBrk ), rfB = mix( 0.602, 0.921, rBrk );
+          mat2 rotR = mat2( rfA, -rfB, rfB, rfA );
+          vec4 rk4 = tri( uDet, pX * 0.5714 * rotR + vec2( 0.19, 0.77 ), pY * 0.5714 * rotR + vec2( 0.19, 0.77 ),
+                                pZ * 0.5714 * rotR + vec2( 0.19, 0.77 ), tw, 0.0 );        // 1.75 u / 32 = 3.4 px
           // triplanar detail normal: this is what gives the smooth loft its rock surface
           // The two blob bands are cut by half and the fine one raised: 8-25 px normal energy
           // is what MID_rms is a band-pass on, and a massif carrying all of its relief there
@@ -2324,7 +2345,11 @@ export class Terrain {
           // carries a saturation signal.
           rock *= mix( vec3( 1.215, 0.986, 0.775 ), vec3( 0.882, 0.984, 1.126 ),
                        smoothstep( 0.26, 0.86, band * 0.70 + rk1.b * 0.22 + rk2.b * 0.16 ) );
-          rock = mix( rock, vec3( 0.268, 0.254, 0.234 ), smoothstep( 0.30, 0.0, local ) * 0.62 );   // scree skirt
+          // scree skirt. LIFTED: 0.268 under a shadowed flank lands at luma 0.06 and the floor
+          // between the summits measured flat-matte near-black (HF_rms 8) — a third of the
+          // massif with no material in it at all, because there is no value left for any of the
+          // bands below to modulate. A scree fan is pale broken rock, not a hole.
+          rock = mix( rock, vec3( 0.352, 0.334, 0.306 ), smoothstep( 0.30, 0.0, local ) * 0.50 );
           // The two COARSE bands take over what the grit band gives up at distance: 30 px
           // blocks and 145 px slabs are the scales a far massif can still resolve, they cost
           // nothing in the pixel band, and without them the ramps between the summits are
@@ -2344,7 +2369,7 @@ export class Terrain {
           // end takes far-rock HF 13.6 -> 12.8 (floor 12) and puts the near/far ramp at 1.64,
           // over the 1.6 the bible asks for, with nothing else in the frame moving. Detail that
           // does not shrink with distance is screen-space detail whatever it is drawn from.
-          rock *= 1.0 + ( smoothstep( 0.26, 0.74, rk4.a ) - 0.5 ) * 0.376 * mix( 0.55, 1.0, rFin );
+          rock *= 1.0 + ( smoothstep( 0.26, 0.74, rk4.a ) - 0.5 ) * 0.376 * mix( 0.36, 1.0, rFin );
 
           // snow: needs altitude, a face that is not sheer, and it favours the lee side.
           // Wind noise strips it off the exposed crest, so it never reads as a white wash.
@@ -2362,7 +2387,18 @@ export class Terrain {
           // Same clip as the surface shader's nCol, and this is the one that blew a scree
           // instance out into the white "hole" in the top-left massif: 0.93 albedo x 2.85 gain
           // x a 0.22 snow specular is well past where the curve still resolves anything.
-          vec3 snowC = mix( vec3( 0.52, 0.60, 0.79 ), vec3( 0.805, 0.818, 0.858 ), rk2.a * 0.6 + rk3.a * 0.4 );
+          // A SUMMIT CAP IS NOT A WHITE CARD. Two things were wrong with it: the hollow end was
+          // a 0.34-saturation blue where the bible caps snow chroma at 0.12, and the only
+          // structure on it was ONE 3.4 px crust band — which is the first thing the mip chain
+          // takes away, so by mid-frame the cap was a featureless patch measuring HF_rms 8 and
+          // reading as a blown void on the biggest mass in the picture. Snow gets the same two
+          // COARSE world-space bands the rock under it carries (145 px drifts, 30 px sastrugi)
+          // plus the bedding it lies in, so it holds its shape at every distance. All four
+          // multipliers average 1.0, so the cap's value does not move.
+          vec3 snowC = mix( vec3( 0.600, 0.646, 0.744 ), vec3( 0.766, 0.780, 0.816 ), rk2.a * 0.6 + rk3.a * 0.4 );
+          snowC *= 0.944 + 0.112 * smoothstep( 0.24, 0.76, rk1.a );      // 145 px drifts
+          snowC *= 0.958 + 0.084 * smoothstep( 0.22, 0.80, rk2.a );      //  30 px sastrugi
+          snowC *= 0.940 + 0.120 * band;                                 // it lies in the bedding
           snowC *= ( 0.94 + 0.11 * rk1.b ) * mix( 1.0, 0.935 + 0.13 * rk4.a, rFin );   // crust, 3.4 px
           // snow replaces the instance tint instead of being multiplied by it, or a dark
           // boulder ends up with grey snow on top
@@ -2374,9 +2410,14 @@ export class Terrain {
         .replace('#include <lights_fragment_end>', /* glsl */`#include <lights_fragment_end>
           vec3 rdd = reflectedLight.directDiffuse / max( material.diffuseColor, vec3( 1e-4 ) );
           float rlit = clamp( max( rdd.r, max( rdd.g, rdd.b ) ) * 0.80, 0.0, 1.0 );
+          // same shadow-chroma rule as the ground: the albedo-squared bounce is the most
+          // saturated light on the board and it only shows where the sun does not reach, so a
+          // shaded flank was measuring MORE saturated than the lit one beside it.
+          vec3 rbnc = mix( vec3( dot( material.diffuseColor, vec3( 0.2126, 0.7152, 0.0722 ) ) ),
+                           material.diffuseColor, mix( 0.68, 1.0, rlit ) );
           reflectedLight.indirectDiffuse += material.diffuseColor
             * ( vec3( 0.176, 0.174, 0.172 ) * mix( 1.16, 1.0, rlit )
-              + material.diffuseColor * vec3( 1.26, 1.10, 0.88 ) * 0.96 * mix( 1.06, 1.0, rlit ) );`);
+              + rbnc * vec3( 1.26, 1.10, 0.88 ) * 0.96 * mix( 1.06, 1.0, rlit ) );`);
     };
     return m;
   }
