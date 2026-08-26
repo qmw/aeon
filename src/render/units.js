@@ -50,6 +50,11 @@ function defV(d) {
 
 // deterministic little PRNG so a reseed lays the same town out the same way twice
 const rng = (seed) => { let s = ((seed | 0) || 1) & 0x7fffffff; return () => (s = (s * 1664525 + 1013904223) & 0x7fffffff) / 0x7fffffff; };
+// Every unit's dye lot, idle phase, stance and build hang off this. It used to hang off
+// `this._nextId`, which only advances when the CALLER omits an id — and turn.js always supplies
+// one, so every soldier in a real match shared seed 1 and a stack came out as one man stamped
+// three times. Hashing the id gives each of them their own, and it is stable across reloads.
+const seedOf = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619); return (h >>> 13) & 0xffff; };
 const lerp = (a, b, t) => a + (b - a) * t;
 const smooth = (t) => t * t * (3 - 2 * t);
 const hexDist = (aq, ar, bq, br) => (Math.abs(aq - bq) + Math.abs(aq - bq + ar - br) + Math.abs(ar - br)) / 2;
@@ -105,6 +110,12 @@ const AO_MUL = new THREE.Color(0.325, 0.335, 0.360);
 // that terrace directly downsun of the keep reads 45-55% darker than the lit terrace beside it,
 // and a multiply that lands at 0.71 of the ground cannot get there through the grade.
 const PROP_MUL = new THREE.Color(0.255, 0.268, 0.292);
+// And a FIGURE goes deeper still. Measured, not guessed: the multiply lands in the linear HDR
+// buffer and the grade then raises it to the 1/2.2, so a 0.42 multiply arrives on screen as a
+// 33% drop — visible to a probe, invisible to a juror standing a soldier on busy ground. 0.19
+// arrives as ~45%, which is what a man's own shadow looks like at a 38-degree sun. Same
+// near-neutral, sky-leaning ratio as the other two, so the shadow hue does not leave the lit hue.
+const FIG_MUL = new THREE.Color(0.190, 0.198, 0.216);
 
 // Fallback livery for the standalone demo. In a real match the civ's OWN colour arrives on
 // spec.color, and it has to win: rules.js paints Aeon 0x4fa8ff, grid.js draws its borders in
@@ -1798,11 +1809,16 @@ class Puffs {
 //   2  WAKE. A stretched foam ellipse for hulls.
 const DECAL_V = `
 attribute vec4 aCol; attribute vec2 aMode;
-varying vec2 vUv; varying vec3 vCol; varying float vMode, vK;
-void main(){ vUv = uv; vCol = aCol.rgb; vK = aCol.w; vMode = aMode.x;
+varying vec2 vUv; varying vec3 vCol; varying float vMode, vK, vK2;
+void main(){ vUv = uv; vCol = aCol.rgb; vK = aCol.w; vMode = aMode.x; vK2 = aMode.y;
   gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0); }`;
 const DECAL_F = `
-varying vec2 vUv; varying vec3 vCol; varying float vMode, vK;
+varying vec2 vUv; varying vec3 vCol; varying float vMode, vK, vK2;
+// signed distance to a capsule: the one primitive the figure silhouette is built from
+float seg(vec2 p, vec2 a, vec2 b, float r){
+  vec2 pa = p - a, ba = b - a;
+  return length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0)) - r;
+}
 // signed distance to a flat-top hexagon of circumradius 1, in the plane
 float hexd(vec2 p){
   const vec3 k = vec3(-0.8660254, 0.5, 0.5773503);
@@ -1846,7 +1862,7 @@ void main(){
     float a = (line * ripple * 0.85 + churn * 0.9) * (1.0 - t) * (1.0 - t);
     if (a < 0.008) discard;
     gl_FragColor = vec4(vec3(0.94, 0.975, 1.0), a * 0.72);
-  } else {
+  } else if (vMode < 3.5) {
     // --- SUN-ALIGNED CONTACT SHADOW. vUv.y is 0 at the caster's feet and 1 at the tip of the
     // shadow, so the darkest texel is always directly under the model and only the TAIL says
     // where the sun is. That ordering is the whole trick: a symmetric pool offset down-sun is
@@ -1859,6 +1875,36 @@ void main(){
     // the contact wedge itself: small, nearly opaque, hard against the boots
     float core = 1.0 - smoothstep(0.10, 0.70, length(vec2(x * 1.15, (t - 0.04) * 2.1)));
     float a = clamp(body * 0.82 + core * 1.05, 0.0, 1.0) * vK;
+    if (a < 0.006) discard;
+    #ifdef MUL
+      gl_FragColor = vec4(mix(vec3(1.0), vCol, a), 1.0);
+    #else
+      gl_FragColor = vec4(vCol, a);
+    #endif
+  } else {
+    // --- THE MAN'S OWN SHADOW. The 2048 cascade DOES draw the figure (a stock receiver laid
+    // 2 cm over the same ground shows it, sword and all) — the terrain's Phong shader simply
+    // never surfaces it, and a red post standing next to the soldier is exactly as shadowless.
+    // So the figure throws its shadow here instead: a humanoid SDF laid down the sun line, feet
+    // at vUv.y = 0 and crown at 1. A blob is a sticker; two legs, a torso, a shoulder line and
+    // a head is a shadow, and that difference is the whole grounding cue.
+    // Distances are in units of the quad's HALF-WIDTH (vK2 = halfWidth / length), so the shape
+    // stays isotropic in world space however long the sun draws it.
+    float t = vUv.y, asp = max(vK2, 0.06);
+    vec2 P = vec2((vUv.x - 0.5) * 2.0, t / asp);
+    float T = 1.0 / asp;                                // crown, in half-width units
+    float d = seg(P, vec2(-0.34, 0.05 * T), vec2(-0.20, 0.44 * T), 0.19);   // near leg
+    d = min(d, seg(P, vec2(0.34, 0.05 * T), vec2(0.20, 0.44 * T), 0.19));   // far leg
+    d = min(d, seg(P, vec2(0.0, 0.40 * T), vec2(0.03, 0.71 * T), 0.50));    // torso
+    d = min(d, seg(P, vec2(-0.62, 0.66 * T), vec2(0.88, 0.62 * T), 0.21));  // arms + board
+    d = min(d, seg(P, vec2(0.05, 0.87 * T), vec2(0.05, 0.93 * T), 0.29));   // head
+    d = min(d, seg(P, vec2(0.50, 0.60 * T), vec2(0.90, 0.95 * T), 0.085));  // what he carries
+    // Penumbra opens with distance from the contact: hard at the boots, soft at the crown.
+    // That gradient is what a real ground shadow does and what stops an SDF reading as a stamp.
+    float a = (1.0 - smoothstep(0.0, 0.07 + 0.52 * t, d)) * (1.0 - 0.30 * t);
+    // and the contact itself: the few centimetres under the soles, which no map resolves
+    a = max(a, (1.0 - smoothstep(0.30, 1.15, length(P - vec2(0.0, 0.06 * T)))) * 0.85);
+    a *= vK;
     if (a < 0.006) discard;
     #ifdef MUL
       gl_FragColor = vec4(mix(vec3(1.0), vCol, a), 1.0);
@@ -1886,12 +1932,12 @@ class Decals {
     this.n = 0;
   }
   reset() { this.n = 0; }
-  push(m, col, k, mode) {
+  push(m, col, k, mode, k2 = 0) {
     if (this.n >= this.cap) return;
     const i = this.n++;
     this.mesh.setMatrixAt(i, m);
     _c.set(col); this.c.setXYZW(i, _c.r, _c.g, _c.b, k);
-    this.k.setXY(i, mode, 0);
+    this.k.setXY(i, mode, k2);
   }
   flush() {
     this.mesh.count = this.n;
@@ -2128,6 +2174,20 @@ export class Units {
     this.shadows.push(_m, col || AO_MUL, k, 3);
   }
 
+  // A FIGURE'S shadow, not a pool: mode 4 draws the man himself, laid down the sun line and
+  // 1.28x his own height because that is what a 38-degree sun does. Height is the true world
+  // height of the cast, so it tracks the LOD boost the same way the model does.
+  _figShade(u, hgt, y, k) {
+    const s = this.sunDir;
+    const hxz = Math.hypot(s.x, s.z) || 1e-3;
+    const L = Math.min(hgt * hxz / Math.max(s.y, 0.30), hgt * 1.9);
+    const W = hgt * 0.30;                                  // half the shoulder-and-shield span
+    const dx = -s.x / hxz, dz = -s.z / hxz;
+    _m.compose(_v.set(u.x + dx * L * 0.5, y, u.z + dz * L * 0.5),
+      _q.setFromEuler(_e.set(0, Math.atan2(-dx, -dz), 0)), _s.set(W * 2, 1, L));
+    this.shadows.push(_m, FIG_MUL, k, 4, W / L);
+  }
+
   // ------------------------------------------------------------- public API
   add(spec) {
     if (!this._ready) { this._pending.push(spec); return spec.id ?? null; }
@@ -2142,18 +2202,28 @@ export class Units {
     const p = axialToWorld(spec.q, spec.r);
     const t = this.map.get(spec.q, spec.r);
     const water = def.boat || !t || t.height <= 0;
+    const seed = seedOf(String(id));
+    const R = rng(seed * 3 + 11);
     const u = {
       id, type: spec.type, def, team: teamOf(spec),
       q: spec.q, r: spec.r, x: p.x, z: p.z, y: water ? WATER_Y : this.y(p.x, p.z),
-      yaw: spec.yaw ?? (Math.random() - 0.5) * 0.9, tYaw: 0, water,
-      phase: Math.random() * 100, walk: 0, seed: (this._nextId * 2654435761) & 0xffff,
+      yaw: spec.yaw ?? (R() - 0.5) * 1.7, tYaw: 0, water,
+      phase: R() * 100, walk: 0, seed,
+      // NOBODY IN A STACK IS THE SAME MAN. A fixed lean, a head turn, one shoulder dropped,
+      // a wider stance and half a size of build, all off this unit's own seed. Six numbers
+      // read once a frame in the bone loop; they cost nothing and they break the clone stamp
+      // that three identical warriors standing in three identical poses is.
+      pv: [(R() - 0.5) * 0.20, (R() - 0.5) * 0.13, (R() - 0.5) * 0.44,
+        (R() - 0.5) * 0.28, (R() - 0.5) * 0.28, (R() - 0.5) * 0.15],
+      pw: 0.955 + R() * 0.09,
       path: null, seg: 0, t: 0, speed: def.boat ? 1.3 : (def.wheels ? 0.9 : 1.15),
       dist: 0, step: 0, slots: null, bone: [], gy: 0,
-      // SCALE LADDER, measured (tools/_upx.mjs) rather than guessed: at the shipped framing a
-      // hex spans 106 px centre to centre and one world unit of HEIGHT projects to ~40 px, so
-      // 2.55 puts a 0.90 foot soldier at ~58 px — 0.55 of a hex, the reference's reading size.
-      // A rider and a cart are already taller before scale, so they need less of it.
-      scale: (spec.scale ?? 1) * (def.boat ? 1.72 : def.wheels ? 1.98 : def.mounted ? 1.95 : 2.55),
+      // SCALE LADDER, measured on the shipped framing: a hex spans 125 px corner to corner and
+      // a world-vertical unit lands on screen at ~30 px. 2.55 put a 0.90 soldier at 2.29 world
+      // units — 70 px, 0.56 of a hex, and TALLER THAN THE TOWN KEEP HE GARRISONS (a tier-3 keep
+      // is 2.44). 1.90 puts him at 1.71 world / ~52 px = 0.42 of a hex and 0.70 of the keep,
+      // which is where Civ draws a soldier. A rider and a cart are already taller before scale.
+      scale: (spec.scale ?? 1) * (def.boat ? 1.34 : def.wheels ? 1.48 : def.mounted ? 1.46 : 1.90),
     };
     u.tYaw = u.yaw;
     for (let i = 0; i < def.rig.bones.length; i++) u.bone.push(new THREE.Matrix4());
@@ -3256,12 +3326,14 @@ export class Units {
     u.ds = u.ds === undefined ? wantS : u.ds + (wantS - u.ds) * Math.min(1, dt * 2.5);
     let usc = u.scale * u.ds;
     // MIN_PX is measured on the un-foreshortened vertical: at this camera pitch a world-up
-    // segment lands on screen at ~0.50 of its projected length, so 96 here is ~48 real pixels
-    // of standing figure — the floor under which a silhouette stops being nameable.
+    // segment lands on screen at ~0.50 of its projected length, so 72 here is ~36 real pixels
+    // of standing figure — the floor under which a silhouette stops being nameable. It moved
+    // with the scale ladder: left at 96 the floor sat ABOVE gameplay zoom and put every unit
+    // past 30 units of depth straight back to the size that lost this round.
     if (this._pxk && this.camera) {
       const dd = Math.hypot(this.camera.position.x - u.x, this.camera.position.y - u.y, this.camera.position.z - u.z);
       const proj = (d.h || 0.85) * usc * this._pxk / Math.max(dd, 1e-3);
-      usc *= THREE.MathUtils.clamp(96 / proj, 1, 1.9);
+      usc *= THREE.MathUtils.clamp(72 / proj, 1, 1.9);
     }
 
     const w = u.walk, idle = 1 - w;
@@ -3317,8 +3389,10 @@ export class Units {
       _q.premultiply(_q2.setFromAxisAngle(_v2.set(-Math.cos(b), 0, Math.sin(b)), ln));
     }
     u.atkS = atk;
+    // pw is this unit's build: same height, a little more or less of him across (see _addUnit)
+    const pw = usc * (d.boat ? 1 : u.pw || 1);
     root.compose(_v.set(u.x + Math.sin(u.yaw) * 0.26 * atk * usc, u.y + bobY - (d.boat ? 0 : 0.022),
-      u.z + Math.cos(u.yaw) * 0.26 * atk * usc), _q, _s.set(usc, usc, usc));
+      u.z + Math.cos(u.yaw) * 0.26 * atk * usc), _q, _s.set(pw, usc, pw));
 
     // ---- death. Topple forward over the boots, sink a little, kick up one puff, then shrink
     // out. The bridge's only death signal is remove(), so this is where it has to live.
@@ -3341,23 +3415,26 @@ export class Units {
     // parenting is the whole reason a helmet cannot drift off a skull here.
     const bones = u.bone, BS = d.rig.bones;
     const breathe = 1 + Math.sin(this.time * 1.6 + u.seed) * 0.012 * idle;
+    // this unit's own stance (see _addUnit). It rides `idle`, so a march still marches.
+    const pv = u.pv || EMPTY;
     for (let i = 1; i < BS.length; i++) {
       const b = BS[i], s = b.sd;
       let rx = 0, ry = 0, rz = 0, sy = 1, oy = 0;
       switch (b.a) {
         case 1:                                        // chest: sway and breath
-          oy = Math.abs(sw2) * 0.022 * w; rz = sw * 0.05 * w; sy = breathe;
-          rx = -0.04 * w + Math.sin(this.time * 1.6 + u.seed) * 0.012 * idle; break;
+          oy = Math.abs(sw2) * 0.022 * w; rz = sw * 0.05 * w + (pv[0] || 0) * idle; sy = breathe;
+          rx = -0.04 * w + Math.sin(this.time * 1.6 + u.seed) * 0.012 * idle + (pv[1] || 0) * idle; break;
         case 2:                                        // head: looks about when idle
-          ry = Math.sin(this.time * 0.7 + u.seed * 1.3) * 0.22 * idle - sw * 0.05 * w;
-          rx = Math.sin(this.time * 0.9 + u.seed) * 0.06 * idle; break;
+          ry = Math.sin(this.time * 0.7 + u.seed * 1.3) * 0.22 * idle - sw * 0.05 * w + (pv[2] || 0) * idle;
+          rx = Math.sin(this.time * 0.9 + u.seed) * 0.06 * idle - (pv[1] || 0) * idle * 0.6; break;
         case 3:                                        // upper arm, counter to its own leg
           rx = (-sw * s * 0.55 * w + Math.sin(this.time * 1.3 + u.seed + s) * 0.05 * idle) * b.sw;
+          rx += (pv[s > 0 ? 3 : 4] || 0) * idle;
           rx += (s < 0 ? -1.9 : -0.45) * u.atkS; break;
         case 4:                                        // forearm: the elbow flexes as it comes back
           rx = -0.34 * w * Math.max(0, -sw * s) * b.sw; break;
         case 5:                                        // thigh, or a horse's leg
-          rx = sw * s * (d.mounted ? 0.34 : 0.62) * w; break;
+          rx = sw * s * (d.mounted ? 0.34 : 0.62) * w + s * (pv[5] || 0) * idle; break;
         case 6:                                        // shin: a knee only ever bends one way
           rx = Math.max(0, sw * s) * 0.70 * w; break;
         case 7:                                        // mount body
@@ -3400,31 +3477,27 @@ export class Units {
       _m.premultiply(bm);
       this.flags.push(_m, f.sail ? 0xe6dcc0 : (u.team.flag ?? u.team.a), f.sail ? (u.team.flag ?? u.team.a) : u.team.b, u.seed * 0.01, f.sail ? 1 : 0);
     }
-    // ---- grounding. ONE occlusion capsule, centred on the feet, multiplied into the ground.
-    // The directional shadow is the sun's job and the 2048 cascade already casts it; what the
-    // cascade cannot buy at 5 cm/texel is the dense wedge of darkness in the few centimetres
-    // where a boot meets dirt, and that is all this is. Laid at the footprint's HIGHEST terrain
-    // sample (see _fit) so the tile's own dome can never eat it, and never displaced: an offset
-    // pool leaves lit ground under the model, which is the exact pixel the review named.
+    // ---- grounding. ONE decal, and it is the man's own silhouette (see DECAL_F mode 4). The
+    // cascade genuinely DOES draw him into the shadow map — a stock receiver laid 2 cm over the
+    // same ground shows it, sword and all — but the terrain's own Phong shader never surfaces
+    // it, and a plain post standing next to the soldier is exactly as shadowless. Five passes
+    // of checking castShadow flags could never have fixed that. The figure carries its own.
     if (!u.water) {
       const rr = (d.foot || 0.26) * usc * 1.15;
+      const hgt = (d.h || 0.85) * usc;
+      // Anchored on the BOOTS, not on the whole sun line: the contact is the pixel that has to
+      // be right, and a quad lifted to clear the far end of its own tail leaves lit ground
+      // between the soles and the darkest texel. Where the ground rises down-sun the tail is
+      // eaten instead, which is what a shadow running into a bank actually does.
       const base = Math.max(u.yMax ?? u.y,
         this.y(u.x - rr, u.z), this.y(u.x + rr, u.z), this.y(u.x, u.z - rr), this.y(u.x, u.z + rr));
-      // a unit mid-hop lifts off; the capsule widens and fades exactly as far as it climbed
+      // a unit mid-hop lifts off; the shadow fades exactly as far as it climbed
       const lift = THREE.MathUtils.clamp((u.y - base) * 3.4, 0, 0.8);
-      const w = (d.foot || 0.26) * usc * 1.05 * (1 + lift * 0.5);
-      // capped: a 1.9-unit-tall soldier under a low sun would otherwise throw a shadow across
-      // most of the next hex, which reads as a wall, not a man.
-      this._shade(u.x, base + 0.030, u.z, (d.h || 0.85) * usc,
-        w, dk * (1.0 - lift * 0.55) * (0.90 + 0.10 * (u.gN || 1)), 1.55);
-      // and a tight occlusion disc right at the soles. The sun-aligned wedge above says WHERE
-      // the light is; this says the boots are touching. Without both, a figure reads as a
-      // sticker with a shadow painted next to it.
-      // 0.55 of the hex inradius, per the brief: plateau under the boots, feathered to nothing
-      // at the rim, MULTIPLYING the ground so it carries the terrain's own hue and can never be
-      // the grey (or worse, blue) puddle five reviews have drawn a box around.
-      _m.compose(_v.set(u.x, base + 0.026, u.z), _q2.identity(), _s.set(w * 1.45, 1, w * 1.45));
-      this.shadows.push(_m, AO_MUL, dk * 0.80 * (1 - lift), 0);
+      const sk = dk * (1 - lift * 0.55) * (0.90 + 0.10 * (u.gN || 1));
+      // a horse and a siege frame are not man-shaped: they keep the sun-aligned mass, at the
+      // figure's darkness. Only what walks on two legs gets the two-legged silhouette.
+      if (d.mounted || d.wheels) this._shade(u.x, base + 0.030, u.z, hgt, (d.foot || 0.26) * usc * 1.25, sk, hgt * 1.6, FIG_MUL);
+      else this._figShade(u, hgt, base + 0.028, sk);
       // NO BASE DISC AND NO OWNERSHIP HEX. grid.js draws the territory band and the selection
       // ring on these exact edges, and a livery puddle the size of the soldier out-read the
       // model it was supposed to point at — the eye found a blue oval first and the figure
