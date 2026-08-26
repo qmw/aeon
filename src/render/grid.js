@@ -86,12 +86,13 @@ attribute vec2 aLocal;    // position on the IDEAL hex, corner radius = 1
 attribute vec2 aTile;     // uv into the state texture
 attribute float aFade;    // baked per-tile legibility; negative marks a water tile
 attribute float aBias;    // EXTRA depth bias, for tiles with rock standing on them (see below)
+attribute float aCliff;   // 6-bit mask: edges whose OTHER half is on the far side of a step
 uniform sampler2D uState;
 uniform float uFar, uBias;
 varying vec2 vL; varying vec4 vS; varying vec3 vP; varying vec2 vT;
-varying float vFade; varying float vD; varying float vWet; varying float vRock;
+varying float vFade; varying float vD; varying float vWet; varying float vRock; varying float vCliff;
 void main() {
-  vRock = step(0.01, aBias);
+  vRock = step(0.01, aBias); vCliff = aCliff;
   vL = aLocal; vT = aTile;
   vS = texture2D(uState, aTile);
   vWet = step(aFade, 0.0);
@@ -117,7 +118,7 @@ void main() {
 const FRAG = /* glsl */`
 precision highp float;
 varying vec2 vL; varying vec4 vS; varying vec3 vP; varying vec2 vT;
-varying float vFade; varying float vD; varying float vWet; varying float vRock;
+varying float vFade; varying float vD; varying float vWet; varying float vRock; varying float vCliff;
 uniform sampler2D uState;
 uniform float uGrid, uDist, uDim, uCurR, uTime;
 uniform vec3 uSun; uniform vec2 uCursor, uStep;
@@ -274,6 +275,24 @@ void main() {
   //   territory  — CIV BLUE, DARKENING, 1.4px, lit by the ground (0.6*N.L + 0.4)
   //   movement   — a fill, above. No stroke at all.
   //   the order  — a team-blue chevron ribbon, its own mesh. No stroke at all.
+  // A STEP OWNS BOTH HALVES OF ITS EDGE. Every stroke here is drawn on d >= 0: a tile paints
+  // only the INBOARD half of its boundary and trusts the neighbour to paint the other half
+  // against it. That holds while the two halves are the same line. At a cliff they are not —
+  // terrain.js splits the shared corner into a lip and a wall foot and closes the step with a
+  // wall — so the neighbour's half is metres below on the far side of rock and the boundary
+  // rasterises HALF WIDTH, 1px of core where flat ground gets 2. That, not strength, is "the
+  // grid dies on the massif": the surviving strokes measure 175/255, there are just half as
+  // many of them, on exactly the tiles a player most needs to count. 2.7% of the map's edges
+  // carry a step over 0.30 and nearly all of them are in the badlands; those draw the FULL
+  // stroke on their own surface, so the plateau closes its hexagon at the lip and the hex below
+  // closes its own at the foot, with the wall between them. One stroke per edge per surface.
+  // Rock takes half a pixel of the same on every edge. MEASURED here: half the badlands'
+  // boundary is behind the terrain's own spires (the scatter layers hide 8% of it; the rest
+  // only comes back by biasing the decal through the rock in front, which draws the line ACROSS
+  // the face that hides it — the floating chord, and the whole of the champion's 1.5x ink on
+  // steep ground). What survives is carrying the read alone, over the busiest, darkest material
+  // on the board. Rock only: grass, sand, water and the entire near field are untouched.
+  float wide = max(bit(vCliff, ek), vRock * 0.55);
   vec3 lk = vec3(1.0); float lhw = 0.0, la = 0.0;
   if (sel > 0.5) {
     lk = vec3(2.30, 1.78, 0.88); lhw = 1.70;
@@ -299,7 +318,7 @@ void main() {
   // doubled grid. dp is in PIXELS, from the exact gradient, so the same profile
   // measures the same width on all six edge orientations and nothing stair-steps.
   if (la > 0.0) {
-    MUL(lk, (1.0 - smoothstep(lhw, lhw + 1.0, dp)) * la)
+    MUL(lk, (1.0 - smoothstep(lhw + wide, lhw + wide + 1.0, dp)) * la)
   } else {
     // THE BARE TILE SEAM. One stroke, centred on d = 0, 1px of core and 1px of feather on
     // EACH side of the shared edge (2px + 2px in total, since both tiles paint their half),
@@ -327,8 +346,8 @@ void main() {
     // reads across the board disappears on the one biome whose tiles a player most needs to
     // count. Rock gets a deeper multiply (aBias marks it, and only rough tiles carry one)
     // while keeping the same hue and the same single profile.
-    vec3 seamK = mix(vec3(0.400, 0.355, 0.310), vec3(0.352, 0.310, 0.268), vRock);
-    MUL(seamK, (1.0 - smoothstep(1.00, 2.00, dp)) * g * mix(1.16, 0.94, lit))
+    vec3 seamK = mix(vec3(0.400, 0.355, 0.310), vec3(0.325, 0.286, 0.247), vRock);
+    MUL(seamK, (1.0 - smoothstep(1.00 + wide, 2.00 + wide, dp)) * g * mix(1.16, 0.94, lit))
   }
   // ALPHA IS NOT OPACITY HERE — it is the DECAL PROTECT MASK, and it is the other half of
   // "the hex grid is nearly invisible". post.js's present pass applies a footprint-graded mip
@@ -602,12 +621,28 @@ export class Grid {
       // edge it marks, and reads as a joint in the rock rather than a wire across the face.
       const bias = rough ? 0.60 : 0;
 
+      // WHICH EDGES LOST THEIR OTHER HALF (see `wide` in the shader). Edge e spans this tile's
+      // corners e and e+1; the neighbour across it is DIRS[EDGE_DIR[e]] and its own corners
+      // (e+4)%6 and (e+3)%6 are the same two points — verified against cornerLocal, exact to 0
+      // in xz. Where the corner cluster held, both tiles read the identical height and the two
+      // half-strokes butt into one line. Where it split, terrain.js put a wall between them.
+      // Under 0.30 the two halves still land within a stroke of each other and merge as they
+      // always did, so nothing on flat or gently rolling ground changes.
+      let cliff = 0;
+      for (let e = 0; cY && e < 6; e++) {
+        const d = DIRS[EDGE_DIR[e]], nb = map.get(t.q + d.q, t.r + d.r);
+        if (!nb) { cliff |= 1 << e; continue; }   // the map edge: terrain walls it down to the floor
+        const drop = Math.max(Math.abs(cY[i * 6 + e] - cY[nb.i * 6 + (e + 4) % 6]),
+                              Math.abs(cY[i * 6 + (e + 1) % 6] - cY[nb.i * 6 + (e + 3) % 6]));
+        if (drop > 0.30) cliff |= 1 << e;
+      }
+
       const key = ((t.q / CH_Q) | 0) * 64 + ((t.r / CH_R) | 0);
       let ch = chunks.get(key);
-      if (!ch) chunks.set(key, ch = { pos: [], loc: [], uv: [], fd: [], bs: [], idx: [] });
+      if (!ch) chunks.set(key, ch = { pos: [], loc: [], uv: [], fd: [], bs: [], cf: [], idx: [] });
       const b = ch.pos.length / 3;
       const uvx = (t.q + 0.5) / map.w, uvy = (t.r + 0.5) / map.h, fsign = water ? -fade : fade;
-      const put = (x, y, z, lx, lz) => { ch.pos.push(x, y, z); ch.loc.push(lx, lz); ch.uv.push(uvx, uvy); ch.fd.push(fsign); ch.bs.push(bias); };
+      const put = (x, y, z, lx, lz) => { ch.pos.push(x, y, z); ch.loc.push(lx, lz); ch.uv.push(uvx, uvy); ch.fd.push(fsign); ch.bs.push(bias); ch.cf.push(cliff); };
 
       put(p.x, this.tileY(i, 0, 0) + lift, p.z, 0, 0);
       for (const R of RINGS) for (let k = 0; k < NR; k++) {
@@ -633,6 +668,7 @@ export class Grid {
       g.setAttribute('aTile', new THREE.BufferAttribute(new Float32Array(ch.uv), 2));
       g.setAttribute('aFade', new THREE.BufferAttribute(new Float32Array(ch.fd), 1));
       g.setAttribute('aBias', new THREE.BufferAttribute(new Float32Array(ch.bs), 1));
+      g.setAttribute('aCliff', new THREE.BufferAttribute(new Float32Array(ch.cf), 1));
       g.setIndex(new THREE.BufferAttribute(new Uint16Array(ch.idx), 1));
       g.computeBoundingSphere();
       const m = new THREE.Mesh(g, this.mat); m.renderOrder = 12;
