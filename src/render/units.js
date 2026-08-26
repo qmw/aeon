@@ -631,9 +631,11 @@ function manParts(I, o) {
   D(at('chest', 'cyl', C.leatherD, M_LEATH, 0, -0.062 * t, 0, 0.276 * w, 0.044, 0.196));      // belt
   D(at('neck', 'cyl', skin, M_SKIN, 0, 0.014, 0.004, 0.086, 0.052, 0.082));
   at('head', 'sph', skin, M_SKIN, 0, 0.046, 0.012, 0.132, 0.148, 0.138);
-  D(at('head', 'sph', C.hair, M_CLOTH, 0, 0.004, 0.040, 0.112, 0.058, 0.098));                // jaw + beard
-  D(at('head', 'box', 0x2b2018, M_LEATH, 0, 0.068, 0.070, 0.076, 0.017, 0.020));              // brow (portrait)
-  at('head', 'sph', skin, M_SKIN, 0, 0.034, 0.090, 0.044, 0.038, 0.032);                      // nose (portrait)
+  // A FACE NEEDS A GAP. Beard top 0.062 met helmet rim bottom 0.003, so every head in the cast
+  // was one brown blob under a bright cap. Jaw drops, rim lifts (HEAD.helm): that gap is the face.
+  D(at('head', 'sph', C.hair, M_CLOTH, 0, -0.014, 0.044, 0.110, 0.052, 0.096));               // jaw + beard
+  D(at('head', 'box', 0x4a3521, M_SKIN, 0, 0.040, 0.086, 0.062, 0.013, 0.014));               // eye line (portrait)
+  at('head', 'sph', skin, M_SKIN, 0, 0.004, 0.092, 0.040, 0.036, 0.030);                      // nose (portrait)
   return p;
 }
 
@@ -641,9 +643,9 @@ function manParts(I, o) {
 const HEAD = {
   // bright dome / hard dark browband / dark jaw, top to bottom: the whole head read at 40 px
   helm: (I) => [
-    P('sph', I.head, C.kit, M_HELM, 0, 0.068, 0.002, 0.160, 0.110, 0.158),
-    D(P('cyl', I.head, C.leatherD, M_LEATH, 0, 0.022, 0.006, 0.196, 0.038, 0.184)),
-    D(P('sph', I.head, 0x33281a, M_LEATH, 0, 0.092, 0.002, 0.042, 0.104, 0.172)),             // fore-aft comb
+    P('sph', I.head, C.kit, M_HELM, 0, 0.078, 0.002, 0.162, 0.118, 0.160),
+    D(P('cyl', I.head, 0x6a4a16, M_MET2, 0, 0.052, 0.006, 0.180, 0.024, 0.176)),               // the helmet's own rim
+    D(P('sph', I.head, 0x33281a, M_LEATH, 0, 0.112, 0.002, 0.042, 0.098, 0.168)),             // fore-aft comb
   ],
   cone: (I) => [P('cone', I.head, C.steel, M_HELM, 0, 0.098, 0.004, 0.208, 0.220, 0.208),
     D(P('cyl', I.head, C.leatherD, M_LEATH, 0, 0.020, 0.006, 0.200, 0.036, 0.188))],
@@ -683,9 +685,12 @@ const OFF = {
     const n = new THREE.Vector3(0, 0, 1).applyEuler(new THREE.Euler(rx, ry, 0)).multiplyScalar(r * 0.36);
     const x = 0.012, y = 0.112, z = 0.034;
     return [
-      P('sph', I.gripL, C.woodD, M_WOOD, x, y, z, r * 1.90, r * 1.90, r * 0.42, rx, ry, 0),
+      // NOT the wood zone: its ring octave puts ten hard bands across a disc twenty pixels wide,
+      // which is the "mottled tan scramble" the review called a plate of food. Plaster's macro
+      // mottle is three features across the same disc — a worn hide board, and it cannot alias.
+      P('sph', I.gripL, C.woodD, M_PLAST, x, y, z, r * 1.90, r * 1.90, r * 0.42, rx, ry, 0),
       P('rim', I.gripL, C.kit, M_MET, x, y, z, r * 2.17, r * 2.17, r * 2.17, rx, ry, 0),
-      P('sph', I.gripL, C.kit, M_MET, x + n.x, y + n.y, z + n.z, r * 0.44, r * 0.44, r * 0.40, rx, ry, 0),
+      P('sph', I.gripL, C.kit, M_MET2, x + n.x, y + n.y, z + n.z, r * 0.44, r * 0.44, r * 0.40, rx, ry, 0),
     ];
   },
   // the bow arc reads at any size and nothing else in the roster has one
