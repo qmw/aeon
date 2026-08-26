@@ -1458,6 +1458,12 @@ export class Terrain {
                     + sharp2( nMic.rg, 3.40 ) * dNear
                     + sharp2( nFin.rg, 2.10 ) * dClose;
           grad *= 1.0 - wSand * 0.10;
+          // SAND KEEPS THE RIPPLE, NOT THE BLOB FIELD. nMic's octaves land at 10-40 screen px,
+          // dead centre of MID_rms's band-pass, and at 3.40 gain in the relief they are the
+          // mottled smears the near sand still wore underneath the ripple train — open sand
+          // measured MID/HF 1.68 with the albedo blobs already gone, because the blobs had
+          // simply moved into the normal. Rock drops this band for the same reason.
+          grad -= sharp2( nMic.rg, 3.40 ) * dNear * 0.55 * wSand;
           // ROCK drops the blob bands and KEEPS the fine one. nMic's octaves land at 7-18
           // screen px, which is precisely the band MID_rms is a band-pass on, and at 3.40 gain
           // on a cut face they are the field of soft round bubble-wrap the whole massif was
@@ -1490,12 +1496,29 @@ export class Terrain {
           float duneL = sin( sPh * 1.15 + nVar.b * 2.2 );                    // 5.5 u crests
           // 0.35 u ripples — 24 screen px in the near field — faded out on their own
           // footprint, because an analytic sine has no mip chain to do it for them.
-          float sRip = smoothstep( 2.4, 5.5, 0.350 / mpp );
-          float rPh = sPh * 17.95 + nMac.b * 1.7;
+          // ONE global wavenumber over a whole quadrant is CORDUROY, and that is what the last
+          // pass shipped. Two fixes, both of which stay on a scalar phase:
+          // (a) a smooth PHASE field bends the train. The local wavefront normal is
+          //     k + grad(phi), so ~13 rad on nVar's 4-6 u band and ~5 on nMac's 1-3 u one
+          //     swings the heading around 15 degrees and wanders the wavelength ~20% — the
+          //     crests curve along the ground instead of holding one heading per region.
+          //     This is the SAFE way to turn a wave: a varying DIRECTION dotted into position
+          //     scrambles the phase by tens of radians per unit and fans out at every zero
+          //     crossing; a varying phase OFFSET cannot, because grad(phi) is bounded.
+          // (b) FETCH gates the amplitude. Ripples build where the pan tilts into the wind and
+          //     die out completely in the sheltered slacks, so the train is patchy rather than
+          //     a comb drawn edge to edge. sRip carries it, so the relief, the trough grit and
+          //     the sheen all fade together.
+          float fetch = smoothstep( 0.28, 0.72, nMac.b * 0.55 + nVar.b * 0.45 )
+                      * ( 0.26 + 0.74 * smoothstep( 0.015, 0.13, gslope ) );
+          float sRip = smoothstep( 2.4, 5.5, 0.350 / mpp ) * fetch;
+          float rPh = sPh * 17.95 + nVar.b * 13.0 + nMac.b * 5.0;
           float ripL = sin( rPh ) * sRip;
           // cos, not sin: the relief is the DERIVATIVE of the wave the albedo below paints,
           // so crest and highlight land on the same line instead of a quarter period apart.
-          grad += vec2( 0.63, 0.78 ) * ( duneL * 0.30 + cos( rPh ) * 0.17 * sRip ) * ( wSand * flatness );
+          // Contrast off the 24 px ripple and onto the 385 px dune: the ripple is the band
+          // MID_rms band-passes, the dune is invisible to both metrics and reads as form.
+          grad += vec2( 0.63, 0.78 ) * ( duneL * 0.38 + cos( rPh ) * 0.115 * sRip ) * ( wSand * flatness );
 
           vec3 upv = mix( vec3( 0.0, 1.0, 0.0 ), vec3( 0.0, 0.0, 1.0 ), step( 0.80, up ) );
           vec3 tgv = normalize( cross( upv, wn ) + vec3( 1e-5, 0.0, 0.0 ) );
@@ -1541,7 +1564,11 @@ export class Terrain {
           // this shader, is a field of blown white specks — cottage cheese, not sward. Detail
           // energy belongs on the 18-50 px bands above, where a player reads material.
           gCol *= mix( 1.0, 1.0 + ( gMic - 0.5 ) * 0.38 * gGate, dNear );
-          gCol *= 1.0 + ( gFin - 0.5 ) * 0.62 * dClose * gGate;
+          // 0.46, not 0.62. Squared by the gamma-2 lift below, 31% on a 3 px band is the
+          // pale cottage-cheese speckle the mid field measured HF_rms 27.5 on — the single
+          // largest block of detail energy in the frame and all of it on the one band that
+          // reads as confetti rather than as sward.
+          gCol *= 1.0 + ( gFin - 0.5 ) * 0.46 * dClose * gGate;
           // The macro band's job is HUE, not value: blue-green swale to yellow-green rise,
           // about 7 degrees apart at matched luminance. Half the old swing — 1.050/0.916 across
           // R and B was a 14% chroma push, and against warm sand that is the acid-green read.
@@ -1572,7 +1599,10 @@ export class Terrain {
           if ( wSand > 0.003 ) {
           // chroma another 10% off each end's OWN luminance, so no value moves: measured
           // 0.436 against #C6A874's own 0.414, which is what read acid beside the sward.
-          sCol = mix( vec3( 0.309, 0.284, 0.242 ), vec3( 0.381, 0.350, 0.299 ), 0.30 + 0.36 * nMac.b + 0.26 * nVar.b );
+          // and another 16% off both ends about their OWN mean: the frame measured sat 0.428
+          // where the bible's desert band tops out at 0.34, which is sand out-chroma'ing the
+          // sward next to it. Value does not move, so the dune's light is untouched.
+          sCol = mix( vec3( 0.305, 0.283, 0.248 ), vec3( 0.376, 0.349, 0.306 ), 0.30 + 0.36 * nMac.b + 0.26 * nVar.b );
           sCol *= v32;
           sCol *= 0.935 + 0.130 * nMes.b;                                             // 480-48 px drift
           // THE MACRO READ IS THE WAVE TRAIN, not a blob field. What used to sit here was
@@ -1582,17 +1612,22 @@ export class Terrain {
           // Crests and ripples are harmonics of sPh, so the structure is DIRECTIONAL and
           // its energy lands on the 24 px band a player reads as material rather than on
           // the 3 px band that measures as confetti.
-          sCol *= 1.0 + duneL * 0.062 + ripL * 0.078;
+          sCol *= 1.0 + duneL * 0.086 + ripL * 0.050;
           // The 10 px cell tap is GONE rather than damped — a Voronoi field sitting on the
           // exact peak of MID_rms's band-pass, i.e. every pixel of its energy landing where
           // the metric reads "blurry blobs". The ripple owns that scale now. The 3 px band
           // keeps a whisper, enough that the near field does not mip to matte: a dune's
           // finest REAL feature is the ripple, and the ripple is 24 px.
+          // Grain stays on dClose and nothing else. Giving sand its own looser footprint gate
+          // to buy back near-field HF prints a HARD BAND of white speckle across the frame:
+          // the board is tilted, so the pixel footprint is LARGEST at the bottom of the screen
+          // and any gate tuned to open in the near field opens in the mid field first. That
+          // band measured +0.55 HF and read as couscous — the confetti the bible rejects.
           sCol *= 1.0 + ( gFin - 0.5 ) * 0.16 * dClose;
           // coarse dark grains swept into the ripple TROUGHS — same hue, lower value. The
           // ripple places them, so the grit reads as sorting rather than as leopard print.
           sCol = mix( sCol, sCol * vec3( 0.812, 0.778, 0.722 ),
-                      smoothstep( 0.40, -0.80, ripL ) * 0.26 * sRip );
+                      smoothstep( 0.40, -0.80, ripL ) * 0.17 * sRip );
           }
 
           // ==================================================================== ROCK
@@ -1699,7 +1734,10 @@ export class Terrain {
           // soil sheets, the pale rise on a dune field. This is the band MID_rms is a band-pass
           // ON, it costs nothing in HF, and without it the material's whole budget sits on
           // grain and measures as noise-beats-structure however much grain there is.
-          col *= 1.0 + ( smoothstep( 0.20, 0.80, nMac.b * 0.55 + nMac.a * 0.45 ) - 0.5 ) * 0.268 * ( 1.0 - wRock * 0.55 - wSand * 0.50 );
+          // Sand's damping halves: this is where the contrast the ripple gave up goes. A
+          // 78-1080 px band cannot reach HF or MID, so a dune field gets its pale rises and
+          // dark slacks back for free.
+          col *= 1.0 + ( smoothstep( 0.20, 0.80, nMac.b * 0.55 + nMac.a * 0.45 ) - 0.5 ) * 0.268 * ( 1.0 - wRock * 0.55 - wSand * 0.26 );
 
           // wet sand and riparian mud darken and warm rather than going grey
           col *= mix( vec3( 1.0 ), vec3( 0.700, 0.628, 0.522 ), wet * ( 1.0 - wSnow ) );
