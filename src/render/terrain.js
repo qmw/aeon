@@ -77,7 +77,10 @@ const FALLBACK = BIOME.grass;
 
 // trees per tile, and how likely each one is a conifer rather than a broadleaf. Thinner than it
 // wants to be on purpose: Civ never lets the canopy hide the board.
-const TREES = { forest: 6.0, jungle: 6.4, grass: 1.6, plains: 1.5, hills: 1.9, tundra: 1.1, snow: 0.2, mountain: 0.3, desert: 0.35, beach: 0.28 };
+// mountain and snow are ZERO. A summit is a modelled mass above the treeline and the scatter
+// seats its trees on the HEX FIELD under it, so those three instances came out as lone bright
+// green lollipops stuck to a bare cliff a thousand metres above anything that grows.
+const TREES = { forest: 6.0, jungle: 6.4, grass: 1.6, plains: 1.5, hills: 1.9, tundra: 1.1, snow: 0, mountain: 0, desert: 0.35, beach: 0.28 };
 const CONIFER = { forest: 0.55, jungle: 0.04, grass: 0.22, plains: 0.18, hills: 0.62, tundra: 0.92, snow: 1.0, mountain: 0.95, desert: 0.0, beach: 0.1 };
 // how much of a tile's scatter is low scrub rather than a tree. Dry and cold ground is mostly
 // scrub, which is what an ecotone actually looks like from the air.
@@ -233,25 +236,30 @@ function ring(P, y0, y1, r0, r1, seg, c0, c1, twist, wob = 0, sd = 3, bark = 0, 
 // One canopy lobe: three jittered rings capped top and bottom, with a hard three-band value
 // ramp. A tree is never ONE of these — four or five overlapping lobes are what put 8-14
 // concavities in the outline instead of the cabbage a single dome gives you.
-function blob(P, cx, cy, cz, rx, ry, seg, cLo, cHi, sd) {
+function blob(P, cx, cy, cz, rx, ry, seg, cLo, cHi, sd, v = 1) {
   const { pos, col, idx, bk } = P;
   const shade = [0.0, 0.40, 1.0], rads = [0.78, 1.0, 0.62], ys = [-0.58, -0.02, 0.56];
   const ids = [];
   for (let r = 0; r < 3; r++) {
     const row = [];
+    // the lower ring of a lobe sits under the mass above it, so it carries its own occlusion
+    const rv = v * (r === 0 ? 0.70 : r === 1 ? 0.92 : 1.0);
     for (let s = 0; s < seg; s++) {
       const a = (s / seg) * Math.PI * 2 + r * 0.42 + sd * 0.11;
-      const w = 0.56 + 0.90 * hash2(s, r + sd * 7, 5501);
+      // +-22%, not +-45%. Half a radius of per-vertex jitter turns a lobe into a spiked star,
+      // and five of those per tree is the crumpled-cabbage read. The irregular silhouette has
+      // to come from where the LOBES sit, not from stabbing each one.
+      const w = 0.78 + 0.44 * hash2(s, r + sd * 7, 5501);
       const yw = (hash2(s, r + sd * 11, 6113) - 0.5) * 0.34;
       row.push(pos.length / 3);
       pos.push(cx + Math.cos(a) * rx * rads[r] * w, cy + ( ys[r] + yw ) * ry, cz + Math.sin(a) * rx * rads[r] * w);
       const t = shade[r], c0 = cLo[0] + (cHi[0] - cLo[0]) * t, c1 = cLo[1] + (cHi[1] - cLo[1]) * t, c2 = cLo[2] + (cHi[2] - cLo[2]) * t;
-      col.push(c0, c1, c2); bk.push(0);
+      col.push(c0 * rv, c1 * rv, c2 * rv); bk.push(0);
     }
     ids.push(row);
   }
-  const bot = pos.length / 3; pos.push(cx, cy - ry * 0.88, cz); col.push(cLo[0] * 0.46, cLo[1] * 0.46, cLo[2] * 0.46); bk.push(0);
-  const top = pos.length / 3; pos.push(cx, cy + ry * 1.02, cz); col.push(cHi[0], cHi[1], cHi[2]); bk.push(0);
+  const bot = pos.length / 3; pos.push(cx, cy - ry * 0.88, cz); col.push(cLo[0] * 0.30 * v, cLo[1] * 0.30 * v, cLo[2] * 0.30 * v); bk.push(0);
+  const top = pos.length / 3; pos.push(cx, cy + ry * 1.02, cz); col.push(cHi[0] * v, cHi[1] * v, cHi[2] * v); bk.push(0);
   for (let s = 0; s < seg; s++) {
     const n = (s + 1) % seg;
     idx.push(bot, ids[0][n], ids[0][s]);
@@ -360,26 +368,38 @@ function crown(P, y, rSpread, rx, ry, n, seg, cLo, cHi, sd, phase = 0) {
   for (let k = 0; k < n; k++) {
     const j = hash2(k, sd, 3167), j2 = hash2(k, sd + 3, 4231), j3 = hash2(k, sd + 6, 5077);
     const a = phase + (k / n) * Math.PI * 2 + (j3 - 0.5) * 0.8;
-    blob(P, Math.cos(a) * rSpread * (0.60 + 0.90 * j), y + (j2 - 0.60) * ry * 1.55,
+    const dy = (j2 - 0.60) * ry * 1.55;
+    // Per-lobe exposure. A lobe hanging below the crown's shoulder is inside the tree's own
+    // shadow, and a canopy whose masses all share one value is the flat green shape the
+    // silhouette work was supposed to fix.
+    const v = (0.70 + 0.46 * j) * (0.82 + 0.32 * clamp01(dy / (ry * 1.2) + 0.5));
+    blob(P, Math.cos(a) * rSpread * (0.60 + 0.90 * j), y + dy,
       Math.sin(a) * rSpread * (0.60 + 0.90 * j2), rx * (0.62 + 0.70 * j3), ry * (0.66 + 0.60 * j2),
-      seg, cLo, cHi, sd + k * 5);
+      seg, cLo, cHi, sd + k * 5, v);
   }
 }
 
-// v0: narrow spruce on a bare bole. v1: squat fir, five tiers and a wider skirt.
-// Both keep 0.25-0.35 of clear trunk under the lowest tier so the prop is a TREE at gameplay
-// zoom and not a green cone sitting on the dirt.
+// v0: narrow spruce on a bare bole. v1: squat fir, five tiers and a wider skirt. v2: a tall
+// sparse spire with a long clear bole and big gaps between four tiers. All three keep clear
+// trunk under the lowest tier so the prop is a TREE at gameplay zoom, not a green cone on dirt.
+const CONIF_TIERS = [
+  [[0.34, 0.74, 0.330, 0.185], [0.62, 1.00, 0.268, 0.145], [0.88, 1.22, 0.196, 0.100], [1.08, 1.42, 0.120, 0.0]],
+  [[0.26, 0.60, 0.430, 0.270], [0.48, 0.82, 0.352, 0.215], [0.68, 1.00, 0.276, 0.160], [0.86, 1.14, 0.196, 0.108], [1.00, 1.28, 0.118, 0.0]],
+  [[0.42, 0.80, 0.245, 0.148], [0.72, 1.10, 0.205, 0.118], [1.00, 1.38, 0.155, 0.082], [1.26, 1.64, 0.092, 0.0]],
+];
 function coniferGeometry(v) {
   const P = newP();
-  const th = v === 0 ? 1.40 : 1.18;
-  ring(P, 0, th, v === 0 ? 0.062 : 0.072, 0.018, 5, BARK_LO, BARK_HI, 0, 0.10, 11, 1);
-  const tiers = v === 0
-    ? [[0.34, 0.74, 0.330, 0.185], [0.62, 1.00, 0.268, 0.145], [0.88, 1.22, 0.196, 0.100], [1.08, 1.42, 0.120, 0.0]]
-    : [[0.26, 0.60, 0.430, 0.270], [0.48, 0.82, 0.352, 0.215], [0.68, 1.00, 0.276, 0.160], [0.86, 1.14, 0.196, 0.108], [1.00, 1.28, 0.118, 0.0]];
-  tiers.forEach((t, i) => {
+  ring(P, 0, [1.40, 1.18, 1.52][v], [0.062, 0.072, 0.055][v], 0.018, 5, BARK_LO, BARK_HI, 0, 0.10, 11, 1);
+  CONIF_TIERS[v].forEach((t, i) => {
     const lo = 0.26 + i * 0.13, hi = 0.60 + i * 0.17;
-    ring(P, t[0], t[1], t[2], t[3], 7,
-      [lo * 0.76, lo, lo * 0.58], [hi * 0.82, hi, hi * 0.62], i * 0.55 + v * 0.4, 0.46, 3 + i * 5 + v * 17);
+    // Each tier is an OFFSET skirt of its own size, not another slice of one smooth cone.
+    // The lateral walk plus the radius jitter is what reads as branch tiers at 30 px instead
+    // of the green traffic cone every previous pass shipped.
+    const ox = (hash2(i, v * 5 + 1, 2237) - 0.5) * 0.11, oz = (hash2(i, v * 5 + 2, 2341) - 0.5) * 0.11;
+    const rj = 0.80 + 0.38 * hash2(i, v * 5 + 3, 2447);
+    ring(P, t[0], t[1], t[2] * rj, t[3] * rj, 7,
+      [lo * 0.76, lo, lo * 0.58], [hi * 0.82, hi, hi * 0.62], i * 0.55 + v * 0.4, 0.52, 3 + i * 5 + v * 17,
+      0, ox, oz, ox * 0.35, oz * 0.35);
   });
   return fin(P);
 }
@@ -395,11 +415,21 @@ function broadleafGeometry(v) {
     crown(P, 0.92, 0.185, 0.215, 0.185, 6, 8, [0.14, 0.21, 0.10], [0.62, 0.76, 0.46], 1, 0.3);
     crown(P, 0.78, 0.215, 0.150, 0.115, 3, 7, [0.11, 0.17, 0.085], [0.44, 0.56, 0.34], 7, 1.4);
     blob(P, 0.02, 1.10, -0.01, 0.20, 0.155, 8, [0.22, 0.31, 0.15], [0.76, 0.90, 0.56], 13);
-  } else {
+  } else if (v === 1) {
     ring(P, 0, 0.96, 0.070, 0.040, 6, BARK_LO, BARK_HI, 0, 0.12, 31, 1);
     ring(P, 0.84, 1.10, 0.034, 0.020, 4, BARK_LO, BARK_HI, 0.8, 0.1, 33, 0.9, 0, 0, 0.10, 0.08);
     crown(P, 1.16, 0.155, 0.190, 0.150, 4, 8, [0.13, 0.20, 0.095], [0.64, 0.78, 0.47], 2, 0.9);
     blob(P, -0.01, 1.36, 0.02, 0.175, 0.135, 7, [0.22, 0.31, 0.15], [0.78, 0.92, 0.57], 17);
+  } else {
+    // v2: a mature spreading oak — short thick bole, two long limbs and a crown wider than it
+    // is tall, leaning off the trunk axis. The third outline in the temperate mix, and the one
+    // that stops a stand reading as one stamp at two sizes.
+    ring(P, 0, 0.46, 0.104, 0.068, 6, BARK_LO, BARK_HI, 0, 0.16, 51, 1, 0, 0, 0.05, 0.03);
+    ring(P, 0.40, 0.68, 0.052, 0.030, 4, BARK_LO, BARK_HI, 0.3, 0.1, 53, 0.9, 0.04, 0.02, 0.23, 0.07);
+    ring(P, 0.40, 0.64, 0.048, 0.028, 4, BARK_LO, BARK_HI, 1.6, 0.1, 57, 0.9, 0.04, 0.02, -0.19, -0.15);
+    crown(P, 0.72, 0.270, 0.210, 0.132, 6, 8, [0.14, 0.21, 0.10], [0.62, 0.76, 0.46], 23, 0.7);
+    crown(P, 0.58, 0.305, 0.145, 0.096, 3, 7, [0.11, 0.17, 0.085], [0.44, 0.56, 0.34], 29, 2.1);
+    blob(P, 0.05, 0.90, 0.03, 0.185, 0.122, 8, [0.22, 0.31, 0.15], [0.76, 0.90, 0.56], 31);
   }
   return fin(P);
 }
@@ -1828,7 +1858,7 @@ export class Terrain {
       return dx * dx + dz * dz > r2;
     };
     this._clearOf = clearOf;
-    const trees = [[], [], [], [], [], []];   // conifer A/B, broadleaf A/B, dry, scrub
+    const trees = [[], [], [], [], [], [], [], []];   // conifer A/B, broadleaf A/B, dry, scrub, conifer C, broadleaf C
     const ridges = [], rocks = [];
     const hi = this.maxH * 0.58;
     const treeLine = Math.max(2.2, this.maxH * 0.62) * 0.86;
@@ -1844,8 +1874,11 @@ export class Terrain {
       //      and altitude thin it out so nothing grows on a cliff or above the treeline.
       const stand = fbm2(p.x * 0.115 + 41, p.z * 0.115 + 7, { octaves: 3, seed: 3301 });
       let dens = smoothstep01(0.30, 0.62, stand) * 0.85 + 0.15;
-      dens *= 1 - 0.85 * clamp01((this.rough[i] - 0.34) / 0.34);            // no forest on a crag
-      dens *= 1 - 0.90 * clamp01((this.surfY[i] - treeLine) / 1.2);         // treeline
+      // "no forest on a crag" now MEANS it. At 0.85 a shattered tile still kept 15% of its
+      // trees, which is one or two — and one tree alone on a cliff face is a green lollipop
+      // glued to bare rock, the single most obviously-fake prop on the board.
+      dens *= 1 - clamp01((this.rough[i] - 0.30) / 0.30);
+      dens *= 1 - clamp01((this.surfY[i] - treeLine) / 1.2);                // treeline, and it CLOSES
       dens *= 1 + 0.55 * this.rip[i];                                       // riparian gallery
       const want = (TREES[t.biome] ?? 0) * dens;
       const cShare = CONIFER[t.biome] ?? 0.4, scrubShare = SCRUB[t.biome] ?? 0.3;
@@ -1854,7 +1887,7 @@ export class Terrain {
         const h1 = hash2(t.q * 31 + k, t.r * 17, 701), h2 = hash2(t.q * 31 + k, t.r * 17, 809);
         const h3 = hash2(t.q * 31 + k, t.r * 17, 907), h4 = hash2(t.q * 31 + k, t.r * 17, 1013);
         const h5 = hash2(t.q * 31 + k, t.r * 17, 1117), h6 = hash2(t.q * 31 + k, t.r * 17, 1223);
-        const h7 = hash2(t.q * 31 + k, t.r * 17, 1319);
+        const h7 = hash2(t.q * 31 + k, t.r * 17, 1319), h8 = hash2(t.q * 31 + k, t.r * 17, 1427);
         // clumped, not scattered: trees pull toward one of two knots per tile so the grass
         // reads between the stands instead of a wall-to-wall carpet
         const knot = h6 < 0.5 ? 0 : 1;
@@ -1869,13 +1902,24 @@ export class Terrain {
         const cold = this.surfY[i] > hi || t.biome === 'tundra' || t.biome === 'snow';
         const scrub = h7 < scrubShare;
         const conif = !scrub && h4 < cShare;
-        const batch = scrub ? 5 : conif ? (h5 < 0.5 ? 0 : 1) : (jungle ? (h5 < 0.55 ? 3 : 2) : dry ? (h5 < 0.62 ? 4 : 2) : (h5 < 0.30 ? 3 : 2));
+        // three outlines per biome, and the batch is picked on h5 while the YAW comes off h8.
+        // They used to share one hash, so every conifer-A on the map faced the same half of the
+        // compass and every conifer-B the other — a whole forest of clones in two poses.
+        const batch = scrub ? 5
+          : conif ? (h5 < 0.38 ? 0 : h5 < 0.72 ? 1 : 6)
+          : jungle ? (h5 < 0.42 ? 3 : h5 < 0.76 ? 2 : 7)
+          : dry ? (h5 < 0.58 ? 4 : h5 < 0.82 ? 2 : 7)
+          : (h5 < 0.28 ? 3 : h5 < 0.68 ? 2 : 7);
         const kind = scrub ? 4 : jungle ? 1 : cold ? 2 : dry ? 3 : 0;
         // Scale against a hex: a hex is 1.73 units across the flats, so a canopy has to sit
         // near 0.4 of that or the board reads as a diorama of gravel. +-0.75..1.30 per instance.
-        const base = scrub ? 0.44 : jungle ? 0.86 : conif ? 0.76 : 0.80;
+        // A forest hex carries a mature stand; the one-off tree on open grass is a sapling by
+        // comparison. Sizing them the same is why a forest tile read as grass with specks on
+        // it instead of as woodland.
+        const standBig = t.biome === 'forest' || t.biome === 'jungle' ? 1.16 : 1;
+        const base = (scrub ? 0.44 : jungle ? 0.86 : conif ? 0.76 : 0.80) * standBig;
         const s = base * (0.75 + 0.55 * h3);
-        trees[batch].push(p.x + lx, y - 0.04, p.z + lz, s, h5 * 6.283, h3, kind, i);
+        trees[batch].push(p.x + lx, y - 0.04, p.z + lz, s, h8 * 6.283, h3, kind, i);
         this._ground(p.x + lx, p.z + lz, y, (scrub ? 0.46 : 0.66) * s, scrub ? 0.34 : 0.56, i);
         if (!scrub) this._stamp(p.x + lx, p.z + lz, 0.30 + 0.9 * s, 0.55, 2);
       }
@@ -2000,6 +2044,8 @@ export class Terrain {
       this._instance(broadleafGeometry(1), trees[3], treeMat, 'terrain-broadleaf-b'),
       this._instance(dryTreeGeometry(), trees[4], treeMat, 'terrain-dry'),
       this._instance(shrubGeometry(0), trees[5], treeMat, 'terrain-scrub'),
+      this._instance(coniferGeometry(2), trees[6], treeMat, 'terrain-conifer-c'),
+      this._instance(broadleafGeometry(2), trees[7], treeMat, 'terrain-broadleaf-c'),
     ];
     for (const m of this.treeMesh) if (m) {
       // a matching depth material, or the wind sway would detach every shadow from its tree
@@ -2229,10 +2275,14 @@ export class Terrain {
       // 0 temperate, 1 jungle, 2 boreal, 3 dry — hue jittered +-9 degrees, value +-25%
       const c = CANOPY[kind] || CANOPY[0];
       const jitter = hash2(n * 13 + 5, kind, 3733);
+      // value rides its OWN hash. It used to ride `tint`, the same number that sets the
+      // instance scale and aspect — so the whole population was one-dimensional: every big
+      // tree pale, every small one dark, which is a gradient, not variety.
+      const vj = hash2(n * 11 + 9, kind + 3, 4517);
       const st = fbm2(data[o] * 0.085 + 3, data[o + 2] * 0.085 + 11, { octaves: 2, seed: 5701 });
       col.setHSL(c[0] + (jitter - 0.5) * 0.05 + (st - 0.5) * 0.040,
         c[1] * (0.86 + 0.30 * tint) * (0.82 + 0.36 * st),
-        c[2] * (0.74 + 0.58 * tint) * (0.84 + 0.34 * st), THREE.LinearSRGBColorSpace);
+        c[2] * (0.68 + 0.64 * vj) * (0.84 + 0.34 * st), THREE.LinearSRGBColorSpace);
       q.setFromEuler(e);
       m4.compose(pos, q, scl);
       return data[o + 7];
@@ -2340,8 +2390,16 @@ export class Terrain {
             reflectedLight.indirectDiffuse += directionalLights[ 0 ].color * material.diffuseColor
               * rimF * sunSide * sunSide * 0.24;
           #endif
-          reflectedLight.indirectDiffuse += material.diffuseColor
-            * ( vec3( 0.198, 0.206, 0.214 ) + material.diffuseColor * vec3( 1.05, 1.20, 0.95 ) * 0.74 );`);
+          // SKY OCCLUSION. The fill used to be one flat number over the whole prop, which is
+          // why a canopy built out of lobes still came back as a flat green shape: the tops and
+          // the undersides were within a few percent of each other, so none of the modelling
+          // reached the screen. Skylight arrives from ABOVE — an up-facing leaf sees the whole
+          // dome, a down-facing one sees the tree it is hanging from. That single term is what
+          // gives the crown form and puts a dark edge under every mass.
+          vec3 wN = normalize( ( vec4( normal, 0.0 ) * viewMatrix ).xyz );
+          float skyO = 0.40 + 0.60 * ( wN.y * 0.5 + 0.5 );
+          reflectedLight.indirectDiffuse += material.diffuseColor * skyO
+            * ( vec3( 0.208, 0.216, 0.224 ) + material.diffuseColor * vec3( 1.05, 1.20, 0.95 ) * 0.80 );`);
     };
     const d = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
     d.onBeforeCompile = (s) => inject(s);
@@ -2586,7 +2644,12 @@ export class Terrain {
       const mesh = new THREE.InstancedMesh(geo, mat || this.clutMat, n);
       mesh.name = name;
       mesh.frustumCulled = false;
-      mesh.castShadow = mesh.receiveShadow = false;   // 10 px props; the shadow costs more than it shows
+      // A tuft CASTS nothing (10 px of shadow costs more than it shows) but it must RECEIVE.
+      // 12 000 unshadowed blades standing inside a cast shadow are lit by the full key while
+      // the dirt around them is not, so every shadowed hex came back stippled with pale pills
+      // that glow — the "green blob noise with specular blowout" and the "stipple that
+      // sparkles" are both this one flag.
+      mesh.castShadow = false; mesh.receiveShadow = true;
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       mesh.count = 0;
       this.group.add(mesh);
