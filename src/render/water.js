@@ -262,7 +262,8 @@ function tileTopY(map, t) {
   return t.height + (hash2(t.q, t.r, 5501) - 0.5) * 0.085;   // mirrors terrain.js's inland wobble
 }
 
-function buildField(map, levels, scene, riverPaths) {
+// The world rectangle every raster in this file shares, one map-wide margin included.
+function fieldBounds(map) {
   let minX = 1e9, maxX = -1e9, minZ = 1e9, maxZ = -1e9;
   for (const t of map.tiles) {
     const p = axialToWorld(t.q, t.r);
@@ -270,7 +271,25 @@ function buildField(map, levels, scene, riverPaths) {
     if (p.z < minZ) minZ = p.z; if (p.z > maxZ) maxZ = p.z;
   }
   minX -= 1.5; maxX += 1.5; minZ -= 1.5; maxZ += 1.5;
-  const W = Math.ceil((maxX - minX) * PPU), H = Math.ceil((maxZ - minZ) * PPU);
+  return { minX, maxX, minZ, maxZ, W: Math.ceil((maxX - minX) * PPU), H: Math.ceil((maxZ - minZ) * PPU) };
+}
+// Bilinear height off the rasterised ground mesh: the ONE honest answer to "what is the terrain
+// doing here", and what both the wet-sand apron and every river column are planted on.
+function terrSampler(terr, b) {
+  if (!terr) return null;
+  const { minX, minZ, W, H } = b;
+  return (x, z) => {
+    const fx = Math.max(0, Math.min(W - 1.001, (x - minX) * PPU - 0.5));
+    const fz = Math.max(0, Math.min(H - 1.001, (z - minZ) * PPU - 0.5));
+    const x0 = fx | 0, z0 = fz | 0, tx = fx - x0, tz = fz - z0;
+    const g = (a, c) => terr[c * W + a];
+    return (g(x0, z0) * (1 - tx) + g(x0 + 1, z0) * tx) * (1 - tz)
+         + (g(x0, z0 + 1) * (1 - tx) + g(x0 + 1, z0 + 1) * tx) * tz;
+  };
+}
+
+function buildField(map, levels, riverPaths, b, terr, hAt) {
+  const { minX, maxX, minZ, maxZ, W, H } = b;
   const land = new Uint8Array(W * H), surf = new Float32Array(W * H);
   // The bed height the shader turns into optical depth. Land is clamped DOWN to the water line
   // it borders: the channel is only ever read under water, and an unclamped 3-unit cliff two
@@ -289,7 +308,6 @@ function buildField(map, levels, scene, riverPaths) {
   // below), so a ramp off IT has no lattice in it anywhere. Physically it is also the right
   // variable: a shelf is pale sand because it is shallow, and the deep is dark because silt
   // settles there.
-  const terr = rasterTerrain(scene, minX, minZ, W, H);
   // Only tiles that actually touch water are allowed to decide the waterline from geometry —
   // an inland hollow half a unit above sea level must never be classified as ocean.
   const coastal = new Uint8Array(map.tiles.length);
@@ -396,16 +414,6 @@ function buildField(map, levels, scene, riverPaths) {
     return (g(x0, z0) * (1 - tx) + g(x0 + 1, z0) * tx) * (1 - tz)
          + (g(x0, z0 + 1) * (1 - tx) + g(x0 + 1, z0 + 1) * tx) * tz;
   };
-  // bilinear terrain height, so the wet-sand apron lands on the real mesh instead of on a
-  // second guess at it (an apron half a unit above the beach is a grey film with a hex border)
-  const hAt = terr ? (x, z) => {
-    const fx = Math.max(0, Math.min(W - 1.001, (x - minX) * PPU - 0.5));
-    const fz = Math.max(0, Math.min(H - 1.001, (z - minZ) * PPU - 0.5));
-    const x0 = fx | 0, z0 = fz | 0, tx = fx - x0, tz = fz - z0;
-    const g = (a, b) => terr[b * W + a];
-    return (g(x0, z0) * (1 - tx) + g(x0 + 1, z0) * tx) * (1 - tz)
-         + (g(x0, z0 + 1) * (1 - tx) + g(x0 + 1, z0 + 1) * tx) * tz;
-  } : null;
   return {
     tex, sdAt, hAt, res: new THREE.Vector2(W, H),
     min: new THREE.Vector2(minX, minZ),
@@ -822,31 +830,37 @@ function riverChains(map, cornerY, levels) {
   return chains;
 }
 
-function buildRivers(map, cornerY, levels) {
+function buildRivers(map, cornerY, levels, groundY) {
   const chains = riverChains(map, cornerY, levels);
+  // The real ground under any world point. Falls back to the per-tile plateau top when the
+  // scene has no terrain mesh yet (headless), which is the guess this used to ship.
+  const gAt = groundY || ((x, z) => { const a = worldToAxial(x, z), t = map.get(a.q, a.r); return t ? tileTopY(map, t) : WATER_Y; });
   if (!chains.length) return null;
   const P = [], U = [], V = [], F = [], S = [], D = [], TG = [], I = [], paths = [];
-  // u across the ribbon, and how far that column sits above the bank height. The outer pair
-  // dives below ground on purpose: the terrain clips it, so the ribbon's edge always meets the
-  // ground exactly instead of hovering on a guessed height.
-  // SEVEN columns, and the two new ones are the whole point: a raised BANK LIP either side of
-  // the water, with the sheet sitting in the slot between them.
+  // Seven columns across the ribbon:
   //
   //   toe(-2.3)  lip(-1.5)  edge(-1)  centre(0)  edge(1)  lip(1.5)  toe(2.3)
   //
-  // The obvious way to carve a channel — drop the water 0.6-0.9 below the bank — cannot work
-  // from this file: terrain.js owns the ground mesh, mapgen incises rivers per TILE rather than
-  // per channel, and any surface pushed below the ground is simply depth-tested away. So the
-  // slot is built the other way up: the water stays on the ground plane and the banks RISE, as
-  // a real alluvial river's natural levees do. From a 40-50 degree camera the read is identical
-  // — a lip catching the sun, a shaded inner face, the sheet lower than the ground beside it —
-  // and unlike a sunken channel it can never be swallowed by the terrain.
-  // The toes dive below ground on purpose, so the bank always MEETS the terrain exactly instead
-  // of ending on a guessed height.
-  // cornerHeights() mirrors terrain.js MINUS its sub-decimetre jitter, so a sheet 4.5 cm over
-  // the corner is inside the ground's own noise and the terrain wins the depth test in
-  // patches. 11 cm clears it; at this camera that is two pixels of parallax and nothing else.
-  const COL = [-2.30, -1.50, -1.0, 0, 1.0, 1.50, 2.30], LIFT = [-0.34, 0, 0.095, 0.115, 0.095, 0, -0.34];
+  // WHERE THEY SIT IN Y IS THE WHOLE FIX THIS ROUND, and the measurement that forced it:
+  // raycasting every one of the 5782 vertices this function emitted straight down onto
+  // `terrain-surface` (tools/_rvprobe.mjs) came back with 67% of them UNDER the ground, p25
+  // -0.42 u and a worst case of -3.5 u. A sheet that far under an opaque mesh is not a river,
+  // it is whatever fraction of a river the depth test happens to leave standing — which is
+  // exactly the disconnected teal shards with dead-straight aliased edges that every review of
+  // this file has named. The heights came off cornerHeights(): welded hex CORNERS plus a
+  // per-tile plateau guess, i.e. a flat lattice under displaced geometry. Same class of bug as
+  // a grid drawn as straight chords over a canyon, same fix: solve onto the real surface.
+  //
+  // So the ground mesh is rasterised once (rasterTerrain, 8 px/u) and handed in as gAt():
+  //   * the WATER columns (|u| <= 1) share one level y per station — a water surface IS level
+  //     across its channel — set just over the highest ground inside the wetted width, so no
+  //     part of the sheet can be swallowed and the reach is continuous end to end;
+  //   * the MARGIN columns ride the real ground out of the water and up the bank, so the damp
+  //     band is a decal registered with the surface it darkens and the bank rises out of the
+  //     sheet instead of the sheet being pasted over the tile.
+  // LIFT is only the clearance over the mesh's own sub-decimetre jitter now; the polygon offset
+  // does the rest.
+  const COL = [-2.30, -1.50, -1.0, 0, 1.0, 1.50, 2.30], LIFT = 0.045;
 
   let chainSeed = 1;
   for (const chain of chains) {
@@ -857,13 +871,13 @@ function buildRivers(map, cornerY, levels) {
     // old linear 0.155+0.43*flow put a full-flow reach at 2.3 u across, WIDER than the hex it
     // ran through, which is why every river in the last frame read as a flooded field.
     const spring = (chain[0].inDeg | 0) === 0;
-    let pts = chain.map((n) => ({ x: n.x, z: n.z, y: n.y, w: 0.200 + 0.285 * Math.sqrt(Math.min(1, n.flow)), sea: n.sea }));
+    let pts = chain.map((n) => ({ x: n.x, z: n.z, w: 0.200 + 0.285 * Math.sqrt(Math.min(1, n.flow)), sea: n.sea }));
     for (let pass = 0; pass < 2; pass++) {
       if (pts.length < 3) break;
       const out = [pts[0]];
       for (let i = 0; i < pts.length - 1; i++) {
         const a = pts[i], b = pts[i + 1];
-        const mix = (t) => ({ x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t, y: a.y + (b.y - a.y) * t, w: a.w + (b.w - a.w) * t, sea: t < 0.5 ? a.sea : b.sea });
+        const mix = (t) => ({ x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t, w: a.w + (b.w - a.w) * t, sea: t < 0.5 ? a.sea : b.sea });
         out.push(mix(0.25), mix(0.75));
       }
       out.push(pts[pts.length - 1]);
@@ -878,7 +892,6 @@ function buildRivers(map, cornerY, levels) {
       for (let i = 1; i < pts.length - 1; i++) {
         pts[i].x = pts[i].x * 0.42 + (pts[i - 1].x + pts[i + 1].x) * 0.29;
         pts[i].z = pts[i].z * 0.42 + (pts[i - 1].z + pts[i + 1].z) * 0.29;
-        pts[i].y = pts[i].y * 0.42 + (pts[i - 1].y + pts[i + 1].y) * 0.29;
       }
     }
     // Meander: amplitude and wavelength both scale with the channel (a trunk swings wide and
@@ -909,15 +922,6 @@ function buildRivers(map, cornerY, levels) {
         pts[i].z = pts[i].z * 0.5 + (pts[i - 1].z + pts[i + 1].z) * 0.25;
       }
     }
-    // Water never runs uphill — but a downhill sweep with no floor is what BURIED this ribbon.
-    // Each node's y is the higher of its two welded bank corners; forcing the whole chain
-    // monotone drags a reach crossing a rise up to a metre under the ground, and since the sheet
-    // depth-tests against terrain it comes back as the hard polygonal notches a critic measured
-    // punched through every river in the frame. Monotone, floored at 12 cm under the node's own
-    // bank: the reach still reads as running downhill and it can no longer be swallowed.
-    for (let i = 1; i < pts.length; i++) {
-      pts[i].y = Math.max(Math.min(pts[i].y, pts[i - 1].y), pts[i].y - 0.12);
-    }
     // Taper. A chain that starts at a CONFLUENCE is already a river and must not thin again —
     // that reset is what made a catchment read as a set of unrelated blue dashes instead of one
     // branching system. Only a true spring (inDeg 0) starts as a trickle.
@@ -941,19 +945,54 @@ function buildRivers(map, cornerY, levels) {
       // as a 3 u wide half-transparent apron with lipY (0.165 + 0.66w) building a metre-high
       // levee under it. The taper below ends the reach; a flare only widens what is fading.
       pts[i].w *= head * (0.80 + 0.20 * s);
-      // The estuary flares AND THEN GOES TO ZERO. No ribbon may survive onto the sea plane: an
-      // opaque fan of river water lying on open water, clipped by a straight edge where the
-      // mesh runs out, is the worst thing this file has ever drawn. The delta itself is the
-      // sediment plume the sea shader reads out of the field texture — see `plume`.
-      // gone by 0.9 u short of the mouth, full strength 2.6 u inland: the delta itself is the
-      // sediment plume the SEA shader draws out of the field texture (see `plume`), which is the
-      // only estuary that can be drawn without putting river geometry on the water.
+      // THE ESTUARY. No ribbon may survive onto the sea plane — an opaque fan of river water
+      // lying on open water, clipped by a straight edge where the mesh runs out, is the worst
+      // thing this file has ever drawn — so the sheet still goes to zero before the waterline
+      // and the delta proper stays the sediment plume the SEA shader draws out of the field
+      // texture (see `plume`). But it used to go to zero 0.9 u short and only reach full
+      // strength 2.0 u inland, i.e. a whole hex of nothing between the end of the river and the
+      // start of the sea: the reach visibly STOPPED DEAD in a field. Now that every column is
+      // solved onto the real ground (see the height block in buildRivers) the last stations
+      // stand on the beach instead of hanging over it, so the hand-off can happen where it
+      // belongs: full strength 1.25 u inland, gone 0.40 u short of the waterline, which is
+      // inside the plume's own reach and reads as one continuous run to the sea.
       const q = toSea ? 1.0 - Math.max(0.0, Math.min(1.0, (arcEnd[i] - 0.90) / 1.10)) : 0;
       pts[i].fade = (spring ? Math.min(1, 0.18 + i / Math.max(1.0, N * 0.13)) : 1)
                   * (1 - q * q * (3 - 2 * q));
     }
 
     paths.push(pts.map((q) => ({ x: q.x, z: q.z, w: q.w })));
+
+    // ---- SOLVE THE WATER SURFACE ONTO THE GROUND ------------------------------------------
+    // Per station: the highest ground anywhere inside the wetted width, which is the lowest
+    // level the sheet can sit at and still be visible along its whole width. Then three
+    // smoothing passes that may only RAISE (each re-clamps to its own ground), so the profile
+    // reads as a run of level pools stepping downhill rather than as a sheet shrink-wrapped
+    // onto every bump — and no pass can ever put a station back under the terrain.
+    const gA = new Float32Array(N), wyA = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      const p = pts[i], pv = pts[Math.max(0, i - 1)], nx = pts[Math.min(N - 1, i + 1)];
+      let tx = nx.x - pv.x, tz = nx.z - pv.z;
+      const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
+      const gc = gAt(p.x, p.z);
+      let g = gc;
+      for (let k = -3; k <= 3; k++) {
+        const o = (k / 3) * p.w * 1.06;
+        g = Math.max(g, gAt(p.x - tz * o, p.z + tx * o));
+      }
+      // ...but capped 40 cm over the centreline, because where a reach runs along the foot of a
+      // cliff the highest ground in the wetted width is the cliff TOP, and lifting the sheet to
+      // it floats the whole channel. A cliff clipping the far edge of the ribbon is the correct
+      // occlusion: the cut follows the rock. A ribbon standing on the rock is not.
+      // never under the sea either: the last stations of a sea-bound chain stand on drowned
+      // ground, and a sheet below the ocean surface is a sheet the ocean depth-tests away.
+      gA[i] = wyA[i] = Math.max(Math.min(g, gc + 0.40), WATER_Y) + LIFT;
+    }
+    // ...and the raise is capped at 8 cm, or a station next to a waterfall gets dragged into
+    // the air by its neighbour and the sheet floats off the reach it belongs to.
+    for (let pass = 0; pass < 3; pass++) for (let i = 1; i < N - 1; i++)
+      wyA[i] = Math.min(Math.max(gA[i], (wyA[i - 1] + 2 * wyA[i] + wyA[i + 1]) * 0.25), gA[i] + 0.08);
+
     let arc = 0;
     const base0 = P.length / 3;
     for (let i = 0; i < N; i++) {
@@ -961,7 +1000,9 @@ function buildRivers(map, cornerY, levels) {
       let tx = nx.x - pv.x, tz = nx.z - pv.z;
       const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
       if (i > 0) arc += Math.hypot(p.x - pv.x, p.z - pv.z);
-      const slope = i > 0 ? (pv.y - p.y) / Math.max(0.05, Math.hypot(p.x - pv.x, p.z - pv.z)) : 0;
+      // White water is EARNED off the surface the reach actually runs on, not off a lattice of
+      // hex corners: this is the real drop per world unit of the solved profile.
+      const slope = i > 0 ? (wyA[i - 1] - wyA[i]) / Math.max(0.05, Math.hypot(p.x - pv.x, p.z - pv.z)) : 0;
       const steep = Math.max(0, Math.min(1, (slope - 0.045) * 3.2));
       for (let c = 0; c < 7; c++) {
         const u = COL[c], au = Math.abs(u);
@@ -970,25 +1011,16 @@ function buildRivers(map, cornerY, levels) {
         const off = au > 2.0 ? Math.sign(u) * (p.w + 0.62)
                   : au > 1.2 ? Math.sign(u) * (p.w + 0.26) : u * p.w;
         const cx = p.x - tz * off, cz = p.z + tx * off;
-        // EVERY COLUMN SITS ON THE GROUND BENEATH IT. All seven used to take their height from
-        // the CENTRELINE node — the higher of the two welded bank corners of the tile the
-        // channel runs through — so wherever the land falls away sideways (which is every reach
-        // approaching a coast, and every bank on a slope) the whole 4.6 u cross-section hung in
-        // the air on the centreline's height. Measured on the shipped build: the sheet floated
-        // up to 1.56 u over the terrain, p95 0.49, and with depthWrite off, a -14 polygon offset
-        // and a half-transparent bank skirt that is precisely the translucent mauve slab lying
-        // over the coastal shallows and the stacked planes smearing tiles beside the keep.
-        // tileTopY is terrain.js's own plateau top for the tile this column actually lands in —
-        // the same quantity buildField rasterises out of the surface mesh, and the quantity p.y
-        // itself is derived from for the CENTRELINE's tile. Clamping to it buries the toes again
-        // and lets the terrain clip this cross-section the way it was designed to.
-        const ca = worldToAxial(cx, cz), ct = map.get(ca.q, ca.r);
-        const gy = ct ? Math.min(p.y, tileTopY(map, ct)) : p.y;
-        // The lip used to stand lipY (up to 34 cm) above the ground so it could be shaded as a
-        // levee. It is a DARKENING now, and a darkening has to be registered with the surface it
-        // darkens or it prints as a band offset from its own channel. Flat on the ground; the
-        // terrain still clips the toes, which is what gives the margin its ragged outer edge.
-        P.push(cx, gy + (au > 1.2 && au < 2.0 ? 0.055 : LIFT[c]), cz);
+        // The wetted width is ONE LEVEL — a water surface is level across its channel — and
+        // the margin rides the real ground, sampled at its midpoint too so a convex bank
+        // cannot slice the quad that carries it out of the water.
+        let y = wyA[i];
+        if (au > 1.2) {
+          const inn = Math.sign(u) * (au > 2.0 ? p.w + 0.26 : p.w);   // the next column inward
+          const mx = p.x - tz * (off + inn) * 0.5, mz = p.z + tx * (off + inn) * 0.5;
+          y = Math.max(gAt(cx, cz), gAt(mx, mz)) + LIFT;
+        }
+        P.push(cx, y, cz);
         U.push(u); V.push(arc); F.push(p.w); S.push(steep); D.push(p.fade); TG.push(tx, tz);
       }
     }
@@ -2195,7 +2227,13 @@ const RIVER_FRAG = /* glsl */`
     // as the territory border running beside it — genuinely ambiguous which was which.
     // A reach mirrors the far bank and the canopy over it, not the open zenith. Every point
     // above 0.16 turns the channel into pale blue tape the same weight as the territory ribbon.
-    col = mix(col, skyOf(R) * 0.55, clamp(fres, 0.0, 0.13));
+    // A river DOES mirror, but it mirrors the far bank and the canopy over it, not the open
+    // zenith, and the ceiling here is load-bearing: MEASURED this round at a x2.2 ramp and a
+    // 0.22 cap (shots/.p16g2.png against .p16g1.png) the whole reach went a flat pale
+    // cornflower — the exact "opaque cornflower polygon" read this pass exists to kill. The
+    // grazing lift is kept, the ceiling is not raised: what makes this water and not tape is
+    // the transmitted bed under it, not a sky lid over it.
+    col = mix(col, skyOf(R) * 0.55, clamp(fres * 1.5, 0.02, 0.14));
     // same art-directed glint sun the sea uses; with the real one the reach never catches light
     vec3 H = normalize(V + uGlint);
     // ONE isotropic GGX lobe on the flow normal. See the sea's specular block for why a narrow
@@ -2207,20 +2245,25 @@ const RIVER_FRAG = /* glsl */`
     // White water is EARNED: a standing curl against the bank, and breaking only where the bed
     // really drops. A reach dusted evenly in white speckle is the loudest 'noise texture' tell a
     // river can have, and it is what made this one read as pixel confetti.
-    float bankLace = smoothstep(0.86, 1.0, au) * smoothstep(0.66, 0.97, r2.a * 0.55 + r4.a * 0.45) * 0.17;
+    float bankLace = smoothstep(0.86, 1.0, au) * smoothstep(0.66, 0.97, r2.a * 0.55 + r4.a * 0.45) * 0.11;
     // Standing white water where the bed drops, plus riffles broken over the shallow inside of
     // every bend. Both scroll downstream with the ribbon's own arc-length uv, so the direction
     // the river runs is legible from a still frame.
     float rapids = smoothstep(0.10, 0.66, vSteep) * smoothstep(0.36, 0.82, r3.a * 0.35 + r2.a * 0.40 + r4.a * 0.25);
     // Riffles ride the shallow inside of a bend and stream downstream from it; with the
     // stretched uv above they come out as flow lines rather than speckle.
+    // ...and it is EARNED off the bed slope now, like the rapids: a reach on the flat carries
+    // flow streaks, not white. Un-gated riffle was white speckle sprayed the length of every
+    // brook in the frame, which is both the confetti the bible forbids and, measured, the whole
+    // of this pass's near-field HF cost.
     float riffle = smoothstep(0.60, 0.96, r3.a * 0.55 + r4.a * 0.45) * (1.0 - smoothstep(0.22, 0.58, vW))
-                 * (0.30 + 0.70 * smoothstep(0.25, 0.85, au)) * 0.17;
+                 * (0.25 + 0.75 * smoothstep(0.02, 0.30, vSteep))
+                 * (0.30 + 0.70 * smoothstep(0.25, 0.85, au)) * 0.13;
     // Shore foam: a thin, torn collar where the sheet actually meets the bank, on BOTH sides of
     // every reach. Without it the water stops on a clean line against the gravel and the whole
     // channel reads as a decal however well the bank itself is shaded.
     float collar = smoothstep(0.72, 0.99, au) * (1.0 - smoothstep(0.99, 1.03, au))
-                 * smoothstep(0.40, 0.82, r1.a * 0.4 + r3.a * 0.6) * 0.30;
+                 * smoothstep(0.40, 0.82, r1.a * 0.4 + r3.a * 0.6) * 0.19;
     // White water only where the bed really drops. A reach dusted evenly in white speckle is the
     // loudest noise-texture tell a river can have, and it is what made this one read chalky.
     float foam = clamp(bankLace + rapids * 0.60 + riffle * 0.70 + collar, 0.0, 1.0) * (0.55 + 0.45 * fine);
@@ -2237,17 +2280,29 @@ const RIVER_FRAG = /* glsl */`
     float bankMask = smoothstep(2.30, 1.00, au);
     float wetB = smoothstep(1.90, 0.96, au);                  // the damp waterline band
 
-    // Soft edges: the ribbon fades over ~8% of its own width instead of stopping on a hard
-    // alpha cut, which is what leaves the stair-stepped silhouette an unfiltered decal shows.
-    // The feather was a fixed 0.15 of the channel's OWN half-width — 3 cm on a brook, i.e. well
-    // under a pixel anywhere but the front row — so every waterline came back with the
-    // stair-stepped silhouette of an unfiltered decal. Widened to at least one and a half pixels
-    // of footprint, expressed in the same u units, the bank is analytically AA'd at every depth.
+    // Soft edges, in two parts.
+    // (1) The analytic AA cut: at least one and a half pixels of footprint expressed in u, so
+    //     the last stroke of the waterline is filtered at every depth instead of stair-stepping.
+    // (2) COVERAGE IS A DEPTH GRADIENT, not a cutout, and that is the difference between water
+    //     bedded into its bank and a polygon terminating on it. Over the thalweg the sheet is
+    //     opaque; by the waterline it is down to 46%, so the bank's own grain, grass, pebbles
+    //     and shadow read straight THROUGH the shallow margin. The same ramp feeds the wet term below
+    //     (it is driven by 1 - wAlpha), so the shallows are simultaneously darkened wet ground
+    //     seen through a thin film — which is what the last few centimetres of a river are.
     float aaU = max(0.15, 1.5 * px / max(vW, 0.06));
-    float wAlpha = smoothstep(1.03, 1.03 - aaU, au) * clamp(vFade, 0.0, 1.0);
+    float wAlpha = smoothstep(1.03, 1.03 - aaU, au) * mix(0.46, 1.0, smoothstep(1.02, 0.72, au))
+                 * clamp(vFade, 0.0, 1.0);
     // How wet the ground is: strongest against the waterline, nothing left at the toe, and it
     // follows the sheet's own fade so the margin dies with the reach it belongs to.
-    float wet = bankMask * (1.0 - wAlpha) * clamp(vFade, 0.0, 1.0) * (0.16 + 0.46 * wetB);
+    // THE ESTUARY, and it costs one exponent. The sheet still dies before the waterline (see
+    // the fade block in buildRivers: an opaque fan of river water lying on open water is the
+    // worst thing this file has ever drawn) — but the DAMP GROUND does not have to die with it.
+    // A river does not stop dead at a line in a field; it opens into a wet tidal flat that runs
+    // to the sea. Raising the margin's fade to 0.35 keeps that flat alive almost to the water
+    // while the sheet above it tapers out, and because it is a smooth darkening rather than a
+    // bright sheet it adds no high-frequency energy to the beach it crosses (measured: the same
+    // reach drawn as WATER to the waterline cost near-sand HF_rms +0.06 and broke the gate).
+    float wet = bankMask * (1.0 - wAlpha) * pow(clamp(vFade, 0.0, 1.0), 0.35) * (0.16 + 0.46 * wetB);
     float a = clamp(wAlpha + wet, 0.0, 1.0);
     if (a < 0.004) discard;
     col = mix(col, foamCol, foam * wAlpha);
@@ -2332,11 +2387,17 @@ export class Water {
     const noise = buildNoiseTexture(map.seed | 0);
     const levels = waterLevels(map);
     const cornerY = cornerHeights(map);
+    // The terrain is rasterised ONCE, up front, because both consumers need it and rivers now
+    // need it BEFORE the field: every column of a channel is planted on the real surface (see
+    // buildRivers), and the surface is the ground mesh, not a per-tile plateau guess.
+    const bounds = fieldBounds(map);
+    const terr = rasterTerrain(this.scene, bounds.minX, bounds.minZ, bounds.W, bounds.H);
+    const groundY = terrSampler(terr, bounds);
     // rivers FIRST: buildField stamps their splines into its signed distance so grid.js's
     // lattice fades over a reach the same way it fades over the sea. See buildField.
-    const riverGeo = buildRivers(map, cornerY, levels);
+    const riverGeo = buildRivers(map, cornerY, levels, groundY);
     const riverPaths = riverGeo?.userData.paths ?? [];
-    const field = buildField(map, levels, this.scene, riverPaths);
+    const field = buildField(map, levels, riverPaths, bounds, terr, groundY);
     if (ctx.renderer) noise.anisotropy = Math.min(4, ctx.renderer.capabilities.getMaxAnisotropy());
 
     this.u = {
