@@ -213,19 +213,22 @@ function buildGeo(pos, idx, col, bark) {
 // carries its own ambient occlusion before a single light touches it. `wob` breaks the
 // perfect circle so the silhouette is never a textbook cone.
 function ring(P, y0, y1, r0, r1, seg, c0, c1, twist, wob = 0, sd = 3, bark = 0, x0 = 0, z0 = 0, x1 = 0, z1 = 0) {
-  const { pos, col, idx, bk } = P;
+  const { pos, col, idx, bk, ct } = P;
   const base = pos.length / 3;
+  // the barrel's own mid-axis point: fin() rounds this tier off around ITS centre, so a skirt
+  // gets a lit upper lip and a dark underside instead of dissolving into the tree's silhouette
+  const mx = (x0 + x1) * 0.5, my = (y0 + y1) * 0.5, mz = (z0 + z1) * 0.5;
   for (let s = 0; s < seg; s++) {
     const a = (s / seg) * Math.PI * 2 + twist;
     const w = 1 + (hash2(s, sd, 4409) - 0.5) * wob;
     pos.push(x0 + Math.cos(a) * r0 * w, y0, z0 + Math.sin(a) * r0 * w);
-    col.push(c0[0], c0[1], c0[2]); bk.push(bark ? bark * 0.62 : 0);
+    col.push(c0[0], c0[1], c0[2]); bk.push(bark ? bark * 0.62 : 0); ct.push(mx, my, mz);
   }
   for (let s = 0; s < seg; s++) {
     const a = (s / seg) * Math.PI * 2 + twist;
     const w = 1 + (hash2(s, sd + 1, 4409) - 0.5) * wob;
     pos.push(x1 + Math.cos(a) * r1 * w, y1, z1 + Math.sin(a) * r1 * w);
-    col.push(c1[0], c1[1], c1[2]); bk.push(bark);
+    col.push(c1[0], c1[1], c1[2]); bk.push(bark); ct.push(mx, my, mz);
   }
   for (let s = 0; s < seg; s++) {
     const n = (s + 1) % seg;
@@ -237,7 +240,7 @@ function ring(P, y0, y1, r0, r1, seg, c0, c1, twist, wob = 0, sd = 3, bark = 0, 
 // ramp. A tree is never ONE of these — four or five overlapping lobes are what put 8-14
 // concavities in the outline instead of the cabbage a single dome gives you.
 function blob(P, cx, cy, cz, rx, ry, seg, cLo, cHi, sd, v = 1) {
-  const { pos, col, idx, bk } = P;
+  const { pos, col, idx, bk, ct } = P;
   const shade = [0.0, 0.40, 1.0], rads = [0.78, 1.0, 0.62], ys = [-0.58, -0.02, 0.56];
   const ids = [];
   for (let r = 0; r < 3; r++) {
@@ -254,12 +257,12 @@ function blob(P, cx, cy, cz, rx, ry, seg, cLo, cHi, sd, v = 1) {
       row.push(pos.length / 3);
       pos.push(cx + Math.cos(a) * rx * rads[r] * w, cy + ( ys[r] + yw ) * ry, cz + Math.sin(a) * rx * rads[r] * w);
       const t = shade[r], c0 = cLo[0] + (cHi[0] - cLo[0]) * t, c1 = cLo[1] + (cHi[1] - cLo[1]) * t, c2 = cLo[2] + (cHi[2] - cLo[2]) * t;
-      col.push(c0 * rv, c1 * rv, c2 * rv); bk.push(0);
+      col.push(c0 * rv, c1 * rv, c2 * rv); bk.push(0); ct.push(cx, cy, cz);
     }
     ids.push(row);
   }
-  const bot = pos.length / 3; pos.push(cx, cy - ry * 0.88, cz); col.push(cLo[0] * 0.30 * v, cLo[1] * 0.30 * v, cLo[2] * 0.30 * v); bk.push(0);
-  const top = pos.length / 3; pos.push(cx, cy + ry * 1.02, cz); col.push(cHi[0] * v, cHi[1] * v, cHi[2] * v); bk.push(0);
+  const bot = pos.length / 3; pos.push(cx, cy - ry * 0.88, cz); col.push(cLo[0] * 0.30 * v, cLo[1] * 0.30 * v, cLo[2] * 0.30 * v); bk.push(0); ct.push(cx, cy, cz);
+  const top = pos.length / 3; pos.push(cx, cy + ry * 1.02, cz); col.push(cHi[0] * v, cHi[1] * v, cHi[2] * v); bk.push(0); ct.push(cx, cy, cz);
   for (let s = 0; s < seg; s++) {
     const n = (s + 1) % seg;
     idx.push(bot, ids[0][n], ids[0][s]);
@@ -343,19 +346,21 @@ function decalGeometry() {
 }
 
 const BARK_LO = [0.30, 0.30, 0.30], BARK_HI = [0.92, 0.92, 0.92];
-const newP = () => ({ pos: [], col: [], idx: [], bk: [] });
+const newP = () => ({ pos: [], col: [], idx: [], bk: [], ct: [] });
+// Foliage normals are rounded toward the centre of the PRIMITIVE that owns them — the lobe, or
+// the branch tier — never toward the whole tree. Blending five modelled lobes to one centroid
+// is what shaded a crown as a single smooth egg: every mass got the same value gradient, so
+// none of the modelling reached the screen and the tree came back as a green ball with facets.
+// Per-primitive, each lobe rounds off on its own and the seams between them go dark, which is
+// the clustered-crown read the whole pass is about.
 function fin(P) {
   const g = buildGeo(P.pos, P.idx, P.col, P.bk);
-  const pos = g.attributes.position.array, nrm = g.attributes.normal.array, bk = P.bk;
-  let cy = 0, cn = 0;
-  for (let i = 0; i < bk.length; i++) if (bk[i] === 0) { cy += pos[i * 3 + 1]; cn++; }
-  if (!cn) return g;
-  cy /= cn;
+  const pos = g.attributes.position.array, nrm = g.attributes.normal.array, bk = P.bk, ct = P.ct;
   for (let i = 0; i < bk.length; i++) {
     if (bk[i] !== 0) continue;
-    const dx = pos[i * 3], dy = pos[i * 3 + 1] - cy, dz = pos[i * 3 + 2];
+    const dx = pos[i * 3] - ct[i * 3], dy = pos[i * 3 + 1] - ct[i * 3 + 1], dz = pos[i * 3 + 2] - ct[i * 3 + 2];
     const l = Math.hypot(dx, dy, dz) || 1;
-    const nx = nrm[i * 3] * 0.30 + dx / l * 0.70, ny = nrm[i * 3 + 1] * 0.30 + dy / l * 0.70, nz = nrm[i * 3 + 2] * 0.30 + dz / l * 0.70;
+    const nx = nrm[i * 3] * 0.34 + dx / l * 0.66, ny = nrm[i * 3 + 1] * 0.34 + dy / l * 0.66, nz = nrm[i * 3 + 2] * 0.34 + dz / l * 0.66;
     const m = Math.hypot(nx, ny, nz) || 1;
     nrm[i * 3] = nx / m; nrm[i * 3 + 1] = ny / m; nrm[i * 3 + 2] = nz / m;
   }
@@ -372,7 +377,7 @@ function crown(P, y, rSpread, rx, ry, n, seg, cLo, cHi, sd, phase = 0) {
     // Per-lobe exposure. A lobe hanging below the crown's shoulder is inside the tree's own
     // shadow, and a canopy whose masses all share one value is the flat green shape the
     // silhouette work was supposed to fix.
-    const v = (0.70 + 0.46 * j) * (0.82 + 0.32 * clamp01(dy / (ry * 1.2) + 0.5));
+    const v = (0.76 + 0.34 * j) * (0.86 + 0.24 * clamp01(dy / (ry * 1.2) + 0.5));
     blob(P, Math.cos(a) * rSpread * (0.60 + 0.90 * j), y + dy,
       Math.sin(a) * rSpread * (0.60 + 0.90 * j2), rx * (0.62 + 0.70 * j3), ry * (0.66 + 0.60 * j2),
       seg, cLo, cHi, sd + k * 5, v);
@@ -391,12 +396,16 @@ function coniferGeometry(v) {
   const P = newP();
   ring(P, 0, [1.40, 1.18, 1.52][v], [0.062, 0.072, 0.055][v], 0.018, 5, BARK_LO, BARK_HI, 0, 0.10, 11, 1);
   CONIF_TIERS[v].forEach((t, i) => {
-    const lo = 0.26 + i * 0.13, hi = 0.60 + i * 0.17;
+    // Each skirt is DARK at its hem and bright at its shoulder, and the hems get darker than
+    // the crown below is bright: that value step is what draws the tier line. A ramp that only
+    // climbed with height (0.26+0.13i to 0.60+0.17i) shaded the whole tree as one lit cone,
+    // which is the smooth green traffic cone the conifers kept coming back as.
+    const lo = 0.15 + 0.055 * i, hi = 0.62 + 0.16 * i;
     // Each tier is an OFFSET skirt of its own size, not another slice of one smooth cone.
     // The lateral walk plus the radius jitter is what reads as branch tiers at 30 px instead
     // of the green traffic cone every previous pass shipped.
     const ox = (hash2(i, v * 5 + 1, 2237) - 0.5) * 0.11, oz = (hash2(i, v * 5 + 2, 2341) - 0.5) * 0.11;
-    const rj = 0.80 + 0.38 * hash2(i, v * 5 + 3, 2447);
+    const rj = 0.78 + 0.48 * hash2(i, v * 5 + 3, 2447);
     ring(P, t[0], t[1], t[2] * rj, t[3] * rj, 7,
       [lo * 0.76, lo, lo * 0.58], [hi * 0.82, hi, hi * 0.62], i * 0.55 + v * 0.4, 0.52, 3 + i * 5 + v * 17,
       0, ox, oz, ox * 0.35, oz * 0.35);
@@ -441,16 +450,22 @@ function dryTreeGeometry() {
   ring(P, 0, 0.74, 0.070, 0.040, 5, BARK_LO, BARK_HI, 0, 0.16, 41, 1, 0, 0, 0.06, -0.04);
   ring(P, 0.66, 0.86, 0.030, 0.020, 4, BARK_LO, BARK_HI, 0.5, 0.1, 43, 0.9, 0.05, -0.03, 0.20, -0.10);
   ring(P, 0.66, 0.84, 0.028, 0.018, 4, BARK_LO, BARK_HI, 1.4, 0.1, 47, 0.9, 0.05, -0.03, -0.16, 0.12);
-  crown(P, 0.90, 0.215, 0.230, 0.088, 4, 9, [0.196, 0.216, 0.152], [0.622, 0.688, 0.520], 3, 0.5);
+  // The umbrella is four pads around a centre mass, each a third narrower and a fifth deeper
+  // than the single flat disc it replaces. A crown 0.46 across and 0.09 deep is a CARD: from
+  // the gameplay rig it showed its own bounding quad and read as a tarp lying on the ground.
+  crown(P, 0.90, 0.230, 0.166, 0.106, 4, 8, [0.196, 0.216, 0.152], [0.622, 0.688, 0.520], 3, 0.5);
+  blob(P, 0.02, 0.955, -0.02, 0.150, 0.078, 8, [0.230, 0.254, 0.178], [0.640, 0.706, 0.534], 9);
   return fin(P);
 }
 
-// A scrub bush: three squat lobes, no trunk. Cheap enough to scatter by the thousand, and it is
-// what fills an ecotone band so grass never meets desert with a hard edge and nothing between.
+// A scrub bush: ONE squat dome, no trunk. It covers 6-10 px on screen, where three lobes buy
+// three lobes' worth of pixel edges and no form at all — a third of the triangles reads the
+// same. Cheap enough to scatter by the thousand, and it is what fills an ecotone band so grass
+// never meets desert with a hard edge and nothing between.
 function shrubGeometry(v) {
   const P = newP();
   const r = v ? 0.30 : 0.24, h = v ? 0.17 : 0.21;
-  crown(P, 0.19, r * 0.42, r * 0.72, h, 3, 7, [0.186, 0.202, 0.138], [0.606, 0.652, 0.462], v ? 4 : 1, v ? 1.1 : 0.2);
+  blob(P, 0, 0.19, 0, r * 0.98, h * 1.15, 7, [0.186, 0.202, 0.138], [0.606, 0.652, 0.462], v ? 4 : 1);
   return fin(P);
 }
 
@@ -2397,7 +2412,7 @@ export class Terrain {
           // dome, a down-facing one sees the tree it is hanging from. That single term is what
           // gives the crown form and puts a dark edge under every mass.
           vec3 wN = normalize( ( vec4( normal, 0.0 ) * viewMatrix ).xyz );
-          float skyO = 0.40 + 0.60 * ( wN.y * 0.5 + 0.5 );
+          float skyO = 0.50 + 0.50 * ( wN.y * 0.5 + 0.5 );
           reflectedLight.indirectDiffuse += material.diffuseColor * skyO
             * ( vec3( 0.208, 0.216, 0.224 ) + material.diffuseColor * vec3( 1.05, 1.20, 0.95 ) * 0.80 );`);
     };
