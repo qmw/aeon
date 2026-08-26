@@ -2838,10 +2838,8 @@ export class Terrain {
   // cannot serve that: it rounds a world point to a tile, and every rim sample is exactly ON a
   // boundary, where the rounding is a coin flip between the two sides of the step. Rename or
   // re-derive any of the three and the grid goes back to scratching across the massif.
-  // _slope is published for the same reason: it is the ONE definition of "this is a cliff
-  // face" in the renderer, and the grid fades its seam on it exactly where the scatter keeps
-  // its props off — so a wall the pebbles refuse to stand on is a wall the lattice stops
-  // drawing a line down.
+  // The grid does NOT fade its seam on slope, and must not: a run that did lost the massif's
+  // lattice outright and the tournament with it. Rock is a third of this board.
   // Height inside tile i at local offset (lx,lz). Barycentric point location on
   // (centre, Ck, Ck+1), then the SAME radial plate profile and the SAME fbm relief the mesh
   // was built with. The old version interpolated linearly to the corners and ignored both,
