@@ -2437,7 +2437,7 @@ export class Terrain {
       s.uniforms.uNoise = { value: this.noise };
       s.uniforms.uDet = { value: this.detail };
       s.vertexShader = s.vertexShader
-        .replace('#include <common>', '#include <common>\nvarying vec3 vRWP;\nvarying vec3 vRWN;\nvarying float vRY;\nvarying float vRBig;')
+        .replace('#include <common>', '#include <common>\nvarying vec3 vRWP;\nvarying vec3 vRWN;\nvarying float vRY;')
         .replace('#include <project_vertex>', /* glsl */`
           #ifdef USE_INSTANCING
             vRWP = ( modelMatrix * instanceMatrix * vec4( transformed, 1.0 ) ).xyz;
@@ -2446,21 +2446,16 @@ export class Terrain {
             vRWN = normalize( mat3( modelMatrix ) * mat3( instanceMatrix )
                               * ( objectNormal / max( iSc * iSc, vec3( 1e-6 ) ) ) );
             vRY = clamp( position.y, 0.0, 1.0 );
-            // A summit mass is 1.15 u across at its narrowest; a boulder is 0.72 at its widest.
-            // Only the masses take the tile boundary below — a hex edge chalked across a pebble
-            // is the line clipping a prop, which is the same fault as drawing it over a tree.
-            vRBig = step( 0.95, iSc.x );
           #else
             vRWP = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;
             vRWN = normalize( mat3( modelMatrix ) * objectNormal );
             vRY = clamp( position.y, 0.0, 1.0 );
-            vRBig = 0.0;
           #endif
           #include <project_vertex>`);
       s.fragmentShader = s.fragmentShader
         .replace('#include <common>', /* glsl */`#include <common>
           uniform vec2 uSnow; uniform sampler2D uNoise; uniform sampler2D uDet;
-          varying vec3 vRWP; varying vec3 vRWN; varying float vRY; varying float vRBig;
+          varying vec3 vRWP; varying vec3 vRWN; varying float vRY;
           vec4 tri( sampler2D T, vec2 aX, vec2 aY, vec2 aZ, vec3 w, float b ) {
             return texture2D( T, aX, b ) * w.x + texture2D( T, aY, b ) * w.y + texture2D( T, aZ, b ) * w.z;
           }`)
@@ -2641,54 +2636,9 @@ export class Terrain {
           // their ratios survive a scale exactly while the whole surface slides back down onto
           // the part of the curve that can still resolve them. Hue and chroma unmoved.
           diffuseColor.rgb = mix( diffuseColor.rgb * rock * 2.40, snowC, snowAmt );
-          // THE TILE BOUNDARY, ON THE ROCK. grid.js draws the lattice as a decal on the
-          // ground, and a summit mass buries the ground it belongs to: measured on this frame,
-          // 40% of the massif's hex boundary is behind terrain's own spires. The decal used to
-          // buy that back with a view-space bias big enough to punch through the rock, which
-          // draws a buried edge across the face in front of it — the straight dark scratches
-          // that read as cracks and flatten a summit into a papery cutout. The honest answer is
-          // for the surface that IS in front to draw the boundary itself: the hex lattice is a
-          // set of vertical curtains in world XZ, so its intersection with this mesh is exactly
-          // where the edge crosses the rock, and it wraps the form instead of cutting across it.
-          // Same lattice as grid.js by construction (hex.js's axial round, then hex.js's own
-          // corner radius), so the stroke is continuous where mass meets ground: one line.
-          vec2 hq = vec2( vRWP.x / 1.5, vRWP.z * 0.5773503 - vRWP.x / 3.0 );
-          vec3 hc = vec3( hq.x, -hq.x - hq.y, hq.y ), hr = floor( hc + 0.5 );
-          vec3 hdd = abs( hr - hc );
-          if ( hdd.x > hdd.z && hdd.x > hdd.y ) hr.x = -hr.y - hr.z;
-          else if ( hdd.z > hdd.y ) hr.z = -hr.x - hr.y;
-          vec2 hL = vRWP.xz - vec2( 1.5 * hr.x, 1.7320508 * ( hr.z + hr.x * 0.5 ) );
-          vec3 hAx = vec3( dot( hL, vec2( 0.8660254, 0.5 ) ), hL.y, dot( hL, vec2( -0.8660254, 0.5 ) ) );
-          vec3 hAb = abs( hAx );
-          float hD = 0.8660254 - max( max( hAb.x, hAb.y ), hAb.z );
-          // the nearest edge's own normal, so the stroke can tell a face it CROSSES from a face
-          // it is tangent to
-          vec2 hN = hAb.x >= max( hAb.y, hAb.z ) ? vec2( 0.8660254, 0.5 ) * sign( hAx.x )
-                  : hAb.y >= hAb.z              ? vec2( 0.0, 1.0 )       * sign( hAx.y )
-                                                : vec2( -0.8660254, 0.5 ) * sign( hAx.z );
-          // PIXEL-constant width off the exact gradient, the same profile grid.js measures its
-          // seam with, so the stroke foreshortens with the face instead of blowing up on it — a
-          // wide bar lying across a shelf reads as fallen timber, not as a tile edge. The other
-          // two terms are for the case a screen metric cannot see: where the surface runs TANGENT
-          // to the curtain (a sheer face standing along its own hex edge) the intersection is not
-          // a line at all, it is a region, and the profile floods a whole flank with it. Fade the
-          // stroke out as the face turns into the curtain, and cap it at 12 cm of rock besides.
-          float hPx = max( length( vec2( dFdx( hD ), dFdy( hD ) ) ), 1e-5 );
-          float hA = ( 1.0 - smoothstep( 1.4, 2.6, hD / hPx ) )        // 1.4 px core, 1.2 px feather
-                   * ( 1.0 - smoothstep( 0.80, 0.95, abs( dot( rwn, vec3( hN.x, 0.0, hN.y ) ) ) ) )
-                   * ( 1.0 - smoothstep( 0.060, 0.120, hD ) ) * vRBig;   // and never 12 cm of rock
-          // ...and it is a DARKENING toward the rock's own hue, never a wire laid on top: the
-          // multiplier is below 1 in all three channels and warmest in blue, so the line tracks
-          // the face into shade with the material and reads as a joint in the rock.
-          diffuseColor.rgb *= mix( vec3( 1.0 ), vec3( 0.480, 0.434, 0.386 ), hA );
           float rspec = ( 0.055 + 0.042 * snowAmt ) * ( 0.45 + 1.1 * rk4.a );  // sparkle, not gloss`)
         .replace('#include <normal_fragment_maps>', 'normal = normalize( mat3( viewMatrix ) * rN );')
         .replace('#include <specularmap_fragment>', 'float specularStrength = rspec;')
-        // ...and the boundary claims the DECAL PROTECT MASK, exactly as grid.js's own strokes do:
-        // post.js's present pass mips the far field on its texel footprint, a massif flank is the
-        // most foreshortened surface in the frame, and it was taking ~60% out of every line drawn
-        // here. Material wants that filter; board furniture does not.
-        .replace('#include <dithering_fragment>', '#include <dithering_fragment>\n\t\tgl_FragColor.a = 1.0 - hA;')
         .replace('#include <lights_fragment_end>', /* glsl */`#include <lights_fragment_end>
           vec3 rdd = reflectedLight.directDiffuse / max( material.diffuseColor, vec3( 1e-4 ) );
           float rlit = clamp( max( rdd.r, max( rdd.g, rdd.b ) ) * 0.80, 0.0, 1.0 );
