@@ -39,7 +39,10 @@
 //  * The BARE SEAM is a darkening at every exposure and on every biome — the multiplier is
 //    below 1 in all three channels, so the line is never brighter than the terrain luminance
 //    under it. What the sun changes is the ALPHA (1.20 in shade, 0.86 in full sun), not the
-//    polarity: a pale line over shaded grass is a lit wire lying on unlit ground.
+//    polarity: a pale line over shaded grass is a lit wire lying on unlit ground. Past ~60
+//    degrees of SLOPE it sits back to a quarter: a wall has no ground plane to engrave, and
+//    a dark line on bare rock with no other cue reads as a scratch, not a boundary. It still
+//    steps down the face (the rim rides terrain's corners) — it just stops shouting there.
 //  * The decal sits ON the ground, not over it. Clearance is bought in the DEPTH TEST (a view-space
 //    bias along the eye ray, which moves nothing on screen) instead of in world Y (which moves the
 //    line by bias*cot(pitch) pixels and is exactly what made the old ribbon hover a fifth of a tile
@@ -86,12 +89,20 @@ attribute vec2 aLocal;    // position on the IDEAL hex, corner radius = 1
 attribute vec2 aTile;     // uv into the state texture
 attribute float aFade;    // baked per-tile legibility; negative marks a water tile
 attribute float aBias;    // EXTRA depth bias, for tiles with rock standing on them (see below)
+attribute float aUp;      // cos(slope) of terrain.js's OWN surface under this vertex
 uniform sampler2D uState;
 uniform float uFar, uBias;
 varying vec2 vL; varying vec4 vS; varying vec3 vP; varying vec2 vT;
-varying float vFade; varying float vD; varying float vWet; varying float vRock;
+varying float vFade; varying float vD; varying float vWet; varying float vRock; varying float vUp;
 void main() {
   vRock = step(0.01, aBias);
+  // Interpolated, and off TERRAIN's surface — not cross(dFdx(vP), dFdy(vP)). The decal fan is
+  // four rings, and its outermost band is a 0.06 u sliver carrying the whole drop from the
+  // tile's plate profile to its welded corner, so the facet normal there is near-vertical on
+  // ordinary ground: fading on it took the lattice off the mid-field grass as well as off the
+  // rock. terrain._slope is the same central difference the scatter already uses to keep props
+  // off cliff faces, so the grid and the pebbles now agree about what a wall is.
+  vUp = aUp;
   vL = aLocal; vT = aTile;
   vS = texture2D(uState, aTile);
   vWet = step(aFade, 0.0);
@@ -117,7 +128,7 @@ void main() {
 const FRAG = /* glsl */`
 precision highp float;
 varying vec2 vL; varying vec4 vS; varying vec3 vP; varying vec2 vT;
-varying float vFade; varying float vD; varying float vWet; varying float vRock;
+varying float vFade; varying float vD; varying float vWet; varying float vRock; varying float vUp;
 uniform sampler2D uState;
 uniform float uGrid, uDist, uDim, uCurR, uTime;
 uniform vec3 uSun; uniform vec2 uCursor, uStep;
@@ -242,7 +253,16 @@ void main() {
   // enough to count landing tiles and to say whose water it is, quiet enough that the sea
   // still reads as liquid rather than as graph paper.
   float wet = (uWHas > 0.5) ? 1.0 - waterMask(vP.xz) : vWet;
-  float g = uGrid * min(att, cur) * mix(1.0, 0.13, wet);
+  // A SEAM BELONGS ON GROUND A UNIT COULD STAND ON. Past ~60 degrees the surface is a WALL:
+  // there is no ground plane left for an engraving to sit in, the fragment is foreshortened to
+  // a couple of pixels, and a dark line on bare rock with no other cue reads as a scratch or a
+  // wire across the face — measured on the badlands walls at 230,150, where the stroke was
+  // holding its full lit-ground strength on rock at 70-80 degrees. The boundary does not MOVE:
+  // the rim rides terrain.js's own welded corners, so it still steps down the face in the right
+  // place. It only sits back to a quarter while it is on the wall and comes back on the
+  // walkable top, which is the one surface the player clicks.
+  float wall = mix(0.25, 1.0, smoothstep(0.36, 0.62, vUp));
+  float g = uGrid * min(att, cur) * mix(1.0, 0.13, wet) * wall;
   float wetK = mix(1.0, 0.13, wet);
   float dp = d / px;                       // distance from the seam, IN PIXELS
 
@@ -339,7 +359,16 @@ void main() {
   // scene target's alpha — blendDstAlpha multiplies it in, everything else in the frame leaves
   // alpha at 1 — and post.js spares whatever it marks. Coverage is measured off the modulator
   // itself, so it covers the bright languages (selection, hover) as well as the dark ones.
-  float cov = clamp(abs(1.0 - dot(m, vec3(0.3333333))) * 1.9, 0.0, 1.0) * f;
+  // ...and the mask has to HUG THE INK. Coverage was linear in the modulator, so the 2px
+  // analytic feather — plus the one pixel post.js dilates the mask by — spared a ~3px band of
+  // bare terrain on each side of every stroke. Sparing the mip there hands that band its raw,
+  // unfiltered material back, and a grass highlight the resolve would have averaged down came
+  // through at full contrast: measured at x=300, a 59,63 shoulder went to 99,97 the moment a
+  // stroke landed beside it. That bright lip on the uphill side is what makes a boundary read
+  // as an embossed ridge pressed into the ground rather than a line drawn on it. The smoothstep
+  // keeps the CORE fully protected (that is what the far-field stroke needs) and lets the
+  // feather fall back into the material it is drawn on.
+  float cov = smoothstep(0.30, 0.90, clamp(abs(1.0 - dot(m, vec3(0.3333333))) * 1.9, 0.0, 1.0)) * f;
   gl_FragColor = vec4(mix(vec3(1.0), m, f), 1.0 - cov);
 }`;
 
@@ -526,6 +555,14 @@ export class Grid {
   tileY(i, lx, lz) {
     return Math.max(WATER_Y + 0.05, this.terrain ? this.terrain._localY(i, lx, lz) : 0);
   }
+  // cos(slope) of terrain.js's own surface, so the seam can sit back where the ground has gone
+  // vertical and there is no plane left to engrave. terrain._slope is rise-over-run on the same
+  // reconstruction tileY uses, and it is the function the prop scatter already asks the same
+  // question with — one definition of "this is a cliff face" for the whole renderer.
+  upAt(i, lx, lz) {
+    const s = this.terrain ? this.terrain._slope(i, lx, lz) : 0;
+    return 1 / Math.sqrt(1 + s * s);
+  }
   // ...and the order ribbon, which is resampled along a spline through the hex CENTRES and so
   // never lands on a boundary, still asks by world XZ.
   surfY(x, z) {
@@ -608,10 +645,10 @@ export class Grid {
 
       const key = ((t.q / CH_Q) | 0) * 64 + ((t.r / CH_R) | 0);
       let ch = chunks.get(key);
-      if (!ch) chunks.set(key, ch = { pos: [], loc: [], uv: [], fd: [], bs: [], idx: [] });
+      if (!ch) chunks.set(key, ch = { pos: [], loc: [], uv: [], fd: [], bs: [], up: [], idx: [] });
       const b = ch.pos.length / 3;
       const uvx = (t.q + 0.5) / map.w, uvy = (t.r + 0.5) / map.h, fsign = water ? -fade : fade;
-      const put = (x, y, z, lx, lz) => { ch.pos.push(x, y, z); ch.loc.push(lx, lz); ch.uv.push(uvx, uvy); ch.fd.push(fsign); ch.bs.push(bias); };
+      const put = (x, y, z, lx, lz) => { ch.pos.push(x, y, z); ch.loc.push(lx, lz); ch.uv.push(uvx, uvy); ch.fd.push(fsign); ch.bs.push(bias); ch.up.push(this.upAt(i, lx, lz)); };
 
       put(p.x, this.tileY(i, 0, 0) + lift, p.z, 0, 0);
       for (const R of RINGS) for (let k = 0; k < NR; k++) {
@@ -637,6 +674,7 @@ export class Grid {
       g.setAttribute('aTile', new THREE.BufferAttribute(new Float32Array(ch.uv), 2));
       g.setAttribute('aFade', new THREE.BufferAttribute(new Float32Array(ch.fd), 1));
       g.setAttribute('aBias', new THREE.BufferAttribute(new Float32Array(ch.bs), 1));
+      g.setAttribute('aUp', new THREE.BufferAttribute(new Float32Array(ch.up), 1));
       g.setIndex(new THREE.BufferAttribute(new Uint16Array(ch.idx), 1));
       g.computeBoundingSphere();
       const m = new THREE.Mesh(g, this.mat); m.renderOrder = 12;
