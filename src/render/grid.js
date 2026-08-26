@@ -6,15 +6,12 @@
 // is a per-channel multiplier on the terrain radiance already sitting in post.js's HDR buffer.
 // Four rules keep it from looking like a debug wireframe, and each one was a bug first:
 //
-//  * The lattice is regular BY CONSTRUCTION — in the SHADER. aLocal is always the ideal
-//    flat-top hexagon, so `d`, the stroke width and the AA never know the ground moved, and no
-//    5- or 7-sided cell can be emitted however the mesh is jittered. Where the vertices go is
-//    a different question, and the answer is terrain.js's OWN welded, jittered tile polygon
-//    (cornerLocal / cornerY) evaluated for THE TILE THAT OWNS THE VERTEX — not heightAt(),
-//    which rounds a world point to a tile and therefore flips sides at every rim sample. On
-//    flat ground that flip is a millimetre; on a cliff it is the whole drop, and the rods it
-//    laid across the massif are the "grid drawn over the cliff faces" read. Never a local copy
-//    of terrain.js's profile: that is how the lattice ended up buried the day it changed.
+//  * The lattice is regular BY CONSTRUCTION. Every vertex sits on the axial->world transform
+//    (flat-top: x = 1.5q, z = sqrt3(r + q/2)); terrain enters as Y ONLY, and it enters through
+//    terrain.heightAt() at that same world XZ — never through a local copy of terrain.js's
+//    radial profile, which is how the whole lattice ended up buried under the ground it is
+//    drawn on the day terrain.js changed that profile. Nothing is derived from the terrain
+//    mesh's jittered XZ, which is what used to emit 5- and 7-sided "hexes" along the coast.
 //  * Line width is PIXEL-constant, from the EXACT gradient of the distance-to-hexagon (not
 //    fwidth, which runs 41% wide on a diagonal and exact on an axis edge — an angle-varying
 //    width sold as a constant one, and the six edge orientations are what stair-stepped).
@@ -39,18 +36,13 @@
 //  * The BARE SEAM is a darkening at every exposure and on every biome — the multiplier is
 //    below 1 in all three channels, so the line is never brighter than the terrain luminance
 //    under it. What the sun changes is the ALPHA (1.20 in shade, 0.86 in full sun), not the
-//    polarity: a pale line over shaded grass is a lit wire lying on unlit ground. It carries
-//    the SAME strength onto a cliff face: a wall is a third of the playable board here, and a
-//    player who cannot see the boundary there cannot see the tile he is clicking. Fading it on
-//    slope was tried and lost a tournament outright — the drape is the fix, not the volume.
+//    polarity: a pale line over shaded grass is a lit wire lying on unlit ground.
 //  * The decal sits ON the ground, not over it. Clearance is bought in the DEPTH TEST (a view-space
 //    bias along the eye ray, which moves nothing on screen) instead of in world Y (which moves the
 //    line by bias*cot(pitch) pixels and is exactly what made the old ribbon hover a fifth of a tile
 //    off its own edge). The residual Y lift is 0.04 — under the fbm ripple, over nothing. The bias
-//    is 0.11 on level ground, smaller than the shortest prop on the board, so anything the player
-//    can see standing on a hex occludes the line over it: an engraving, not an overlay. It grows
-//    with the STEP the tile sits on (see _build), because on a mesa the tile's own wall stands
-//    between the camera and the boundary that wall belongs to.
+//    is 0.11, smaller than the shortest prop on the board, so anything the player can see standing
+//    on a hex occludes the line over it: an engraving, not an overlay.
 //
 // Draw calls: ~12 frustum-culled grid chunks (2-4 survive at gameplay zoom) + 2 for the path.
 import * as THREE from 'three';
@@ -69,12 +61,12 @@ const EDGE_LIFT = 0.04;
 // unit hex corners, flat-top, CCW from +x — local (x, z) on the IDEAL hexagon
 const C = [];
 for (let k = 0; k < 6; k++) C.push([Math.cos(k * Math.PI / 3), Math.sin(k * Math.PI / 3)]);
-// ...and the rings are SAMPLED along that hexagon, not chorded corner to corner: six points
-// makes every hex edge one straight 1.0 u chord in 3D, and on a plateau rim the ground falls
-// away under the middle of it. Two samples per edge halve the chord. These are the LOCAL
-// coordinates only — the world positions come off terrain.js's own corners (see _build) — and
-// both tiles sharing an edge resample the same two welded corners, so their halves of the
-// stroke are the same polyline traversed in opposite directions. One line, from both sides.
+// ...and the rings are SAMPLED along that hexagon, not chorded corner to corner. Six points
+// makes every hex edge one straight 1.0 u chord in 3D: on a plateau rim or a mountain flank the
+// ground falls away under the middle of that chord and the stroke rasterises as a straight bar
+// hanging clear of the surface — the stray grey rods lying across the massif. Two samples per
+// edge halve the chord and the line lies on the relief instead of spanning it. Every sample is
+// ON the ideal hexagon, so `d` in the shader is unchanged and the stroke is still one line.
 const RIM = [];
 for (let k = 0; k < 6; k++) for (let sub = 0; sub < 2; sub++) {
   const a = C[k], b = C[(k + 1) % 6], t = sub / 2;
@@ -91,13 +83,12 @@ attribute vec2 aLocal;    // position on the IDEAL hex, corner radius = 1
 attribute vec2 aTile;     // uv into the state texture
 attribute float aFade;    // baked per-tile legibility; negative marks a water tile
 attribute float aBias;    // EXTRA depth bias, for tiles with rock standing on them (see below)
-attribute float aCliff;   // 6-bit mask: edges whose OTHER half is on the far side of a step
 uniform sampler2D uState;
 uniform float uFar, uBias;
 varying vec2 vL; varying vec4 vS; varying vec3 vP; varying vec2 vT;
-varying float vFade; varying float vD; varying float vWet; varying float vRock; varying float vCliff;
+varying float vFade; varying float vD; varying float vWet; varying float vRock;
 void main() {
-  vRock = step(0.55, aBias); vCliff = aCliff;   // 0.60 is the rock branch; every other tile caps at 0.50
+  vRock = step(0.01, aBias);
   vL = aLocal; vT = aTile;
   vS = texture2D(uState, aTile);
   vWet = step(aFade, 0.0);
@@ -123,7 +114,7 @@ void main() {
 const FRAG = /* glsl */`
 precision highp float;
 varying vec2 vL; varying vec4 vS; varying vec3 vP; varying vec2 vT;
-varying float vFade; varying float vD; varying float vWet; varying float vRock; varying float vCliff;
+varying float vFade; varying float vD; varying float vWet; varying float vRock;
 uniform sampler2D uState;
 uniform float uGrid, uDist, uDim, uCurR, uTime;
 uniform vec3 uSun; uniform vec2 uCursor, uStep;
@@ -280,18 +271,6 @@ void main() {
   //   territory  — CIV BLUE, DARKENING, 1.4px, lit by the ground (0.6*N.L + 0.4)
   //   movement   — a fill, above. No stroke at all.
   //   the order  — a team-blue chevron ribbon, its own mesh. No stroke at all.
-  // A STEP OWNS BOTH HALVES OF ITS EDGE. Every stroke here is drawn on d >= 0: a tile paints
-  // only the INBOARD half of its boundary and trusts the neighbour to paint the other half
-  // against it. That holds while the two halves are the same line. At a cliff they are not —
-  // terrain.js splits the shared corner into a lip and a wall foot and closes the step with a
-  // wall — so the neighbour's half is metres below on the far side of the rock and the boundary
-  // rasterises HALF WIDTH: 1px of core where flat ground gets 2, which post's far-field mip
-  // then finishes off. That is why a correctly draped lattice still reads as thinner on the
-  // massif than the champion's chords did. 2.7% of the map's edges carry a step over 0.30, and
-  // they draw the FULL stroke on their OWN surface: the plateau closes its hexagon at the lip,
-  // the hex below closes its own at the foot, and the wall runs between them — which is what a
-  // terrace looks like. Nothing on flat or rolling ground moves.
-  float wide = bit(vCliff, ek);
   vec3 lk = vec3(1.0); float lhw = 0.0, la = 0.0;
   if (sel > 0.5) {
     lk = vec3(2.30, 1.78, 0.88); lhw = 1.70;
@@ -317,7 +296,7 @@ void main() {
   // doubled grid. dp is in PIXELS, from the exact gradient, so the same profile
   // measures the same width on all six edge orientations and nothing stair-steps.
   if (la > 0.0) {
-    MUL(lk, (1.0 - smoothstep(lhw + wide, lhw + wide + 1.0, dp)) * la)
+    MUL(lk, (1.0 - smoothstep(lhw, lhw + 1.0, dp)) * la)
   } else {
     // THE BARE TILE SEAM. One stroke, centred on d = 0, 1px of core and 1px of feather on
     // EACH side of the shared edge (2px + 2px in total, since both tiles paint their half),
@@ -343,10 +322,10 @@ void main() {
     // ...and the multiply has to be sized to the VALUE UNDER IT. 0.400 on lit sand at L 0.55
     // is a 0.33 drop; the same 0.400 on shaded rock at L 0.18 is 0.11, i.e. the stroke that
     // reads across the board disappears on the one biome whose tiles a player most needs to
-    // count. Rock gets a deeper multiply (vRock, i.e. the 0.60 bias branch — every other tile
-    // caps at 0.50) while keeping the same hue and the same single profile.
+    // count. Rock gets a deeper multiply (aBias marks it, and only rough tiles carry one)
+    // while keeping the same hue and the same single profile.
     vec3 seamK = mix(vec3(0.400, 0.355, 0.310), vec3(0.352, 0.310, 0.268), vRock);
-    MUL(seamK, (1.0 - smoothstep(1.00 + wide, 2.00 + wide, dp)) * g * mix(1.16, 0.94, lit))
+    MUL(seamK, (1.0 - smoothstep(1.00, 2.00, dp)) * g * mix(1.16, 0.94, lit))
   }
   // ALPHA IS NOT OPACITY HERE — it is the DECAL PROTECT MASK, and it is the other half of
   // "the hex grid is nearly invisible". post.js's present pass applies a footprint-graded mip
@@ -357,16 +336,7 @@ void main() {
   // scene target's alpha — blendDstAlpha multiplies it in, everything else in the frame leaves
   // alpha at 1 — and post.js spares whatever it marks. Coverage is measured off the modulator
   // itself, so it covers the bright languages (selection, hover) as well as the dark ones.
-  // ...and the mask has to HUG THE INK. Coverage was linear in the modulator, so the 2px
-  // analytic feather — plus the one pixel post.js dilates the mask by — spared a ~3px band of
-  // bare terrain on each side of every stroke. Sparing the mip there hands that band its raw,
-  // unfiltered material back, and a grass highlight the resolve would have averaged down came
-  // through at full contrast: measured at x=300, a 59,63 shoulder went to 99,97 the moment a
-  // stroke landed beside it. That bright lip on the uphill side is what makes a boundary read
-  // as an embossed ridge pressed into the ground rather than a line drawn on it. The smoothstep
-  // keeps the CORE fully protected (that is what the far-field stroke needs) and lets the
-  // feather fall back into the material it is drawn on.
-  float cov = smoothstep(0.30, 0.90, clamp(abs(1.0 - dot(m, vec3(0.3333333))) * 1.9, 0.0, 1.0)) * f;
+  float cov = clamp(abs(1.0 - dot(m, vec3(0.3333333))) * 1.9, 0.0, 1.0) * f;
   gl_FragColor = vec4(mix(vec3(1.0), m, f), 1.0 - cov);
 }`;
 
@@ -535,26 +505,19 @@ export class Grid {
     this._build();
   }
 
-  // Y of the decal, ASKED OF THE TILE THE VERTEX BELONGS TO — never of heightAt(worldXZ).
+  // Y of the decal at an IDEAL lattice point: ASK THE TERRAIN, at the same world XZ.
   //
-  // heightAt() decides which tile owns a world point by ROUNDING the axial coordinate, and
-  // every rim vertex sits exactly ON a boundary, where that rounding is a coin flip. On flat
-  // ground the two answers agree to a millimetre and nobody noticed. At a cliff they are the
-  // two sides of the drop, so consecutive samples along ONE edge landed alternately on the lip
-  // and on the floor and the rim polyline came out a sawtooth of three-metre vertical rods.
-  // MEASURED on the champion build, walking every edge at an eighth of a unit: 818 of them
-  // carried a vertical jump over 1.0 u between neighbouring samples, worst 3.21 u. Rasterised
-  // at a 60-degree pitch those are the straight grey scratches lying across the massif — the
-  // "grid drawn over the cliff faces as a decal on the heightfield" read. Off the owning
-  // tile's own two welded corners instead: worst 0.07 u, and that is the mesh's own chord.
+  // This used to reconstruct the surface from terrain.js's welded corner heights and a copy of
+  // its radial exponent (pow(R, 2.05)). terrain.js's profile is now a smoothstep, R*R*(3-2R),
+  // which sits up to 0.25 of the centre-to-corner drop ABOVE the old copy, and on top of that
+  // the mesh carries an fbm rim relief the copy knew nothing about. The decal was therefore
+  // BELOW the ground it is drawn on across most of every tile — depth-rejected, and that is
+  // the whole of "the hex grid is nearly invisible". Duplicating another module's height
+  // function is a bug with a delay fuse; heightAt() is the one that cannot go stale.
   //
-  // Duplicating terrain.js's height function is still the bug it always was, so this CALLS it
-  // (_localY is heightAt's own body, minus the rounding step) rather than re-deriving it.
-  tileY(i, lx, lz) {
-    return Math.max(WATER_Y + 0.05, this.terrain ? this.terrain._localY(i, lx, lz) : 0);
-  }
-  // ...and the order ribbon, which is resampled along a spline through the hex CENTRES and so
-  // never lands on a boundary, still asks by world XZ.
+  // It is still safe on the shared rim: heightAt is a pure function of world XZ, so the two
+  // tiles that share a corner sample the same point and get the same Y, and the edge between
+  // two matching vertices is the same rasterised line from both sides. No bead chain.
   surfY(x, z) {
     return Math.max(WATER_Y + 0.05, this.terrain?.heightAt(x, z) ?? 0);
   }
@@ -573,36 +536,20 @@ export class Grid {
       }
     }
 
-    // THE TILE POLYGON THE TERRAIN ACTUALLY RASTERISES, not the ideal one.
-    // terrain.js welds every shared corner and then jitters it — 0.085 inland, 0.30 on a
-    // shoreline — and builds the tile top, and the top of every cliff wall, out to THOSE
-    // corners. The ideal hexagon therefore misses the real boundary by a measured 0.07 u
-    // median and 0.42 u worst: on flat ground that is two pixels of nothing, on a cliff lip it
-    // is the stroke hanging out over the drop instead of sitting on the edge it marks.
-    // The rim rides the terrain's own corners; aLocal stays on the IDEAL hexagon, so `d`, the
-    // pixel-constant width and the analytic AA in the shader are untouched. Both tiles read the
-    // SAME welded corner, so the two halves of a shared edge still coincide exactly — and the
-    // fan is still a hexagon by construction, so no 5- or 7-sided cells come back.
-    const cl = this.terrain?.cornerLocal, cY = this.terrain?.cornerY;
     const chunks = new Map();
     for (const t of map.tiles) {
       const water = t.height === 0, p = axialToWorld(t.q, t.r), i = t.i;
-      const cx = k => (cl ? cl[i * 12 + k * 2] : C[k][0]), cz = k => (cl ? cl[i * 12 + k * 2 + 1] : C[k][1]);
-      // Corner heights straight off the terrain's welded set. The rim ring uses THESE and not
-      // tileY(), because two tiles either side of a seam must land on the identical number:
-      // where the corner cluster held they do (one line, no bead chain), and where it split
-      // they are the lip and the wall foot — which is the boundary running down the face.
-      const cyk = k => (cY ? Math.max(WATER_Y + 0.05, cY[i * 6 + k]) : this.tileY(i, cx(k), cz(k)));
       let lo = 1e9, hi = -1e9;
-      for (let k = 0; k < 6; k++) { const y = cyk(k); lo = Math.min(lo, y); hi = Math.max(hi, y); }
+      for (let k = 0; k < 6; k++) {
+        const y = this.surfY(p.x + C[k][0], p.z + C[k][1]); lo = Math.min(lo, y); hi = Math.max(hi, y);
+      }
       const relief = hi - lo;
 
       // Only a genuine cliff loses the lattice — a tile whose own face has more relief in it
-      // than a hex is wide has no readable ground plane left to engrave. This is a guard for a
-      // pathological seed and nothing more: measured on this map the honest per-tile relief is
-      // 0.30 median and 1.75 worst, so nothing is culled. It used to read up to 4.85 and fade
-      // three tiles out, purely because it was sampling heightAt() at the shared corners, where
-      // the tile it answers for is a coin flip between the three that meet there.
+      // than a hex is wide has no readable ground plane left to engrave. The old window
+      // (1.15 to 3.0, and a flat half for every mountain and snow tile) culled most of the
+      // northern massif and thinned everything with a slope on it, which is a large part of
+      // why the board arrived with no countable grid on it at all.
       let fade = 1 - sstep(4.0, 7.5, relief);
       const rough = t.biome === 'mountain' || t.biome === 'snow';
       // NO extra cut for rock. Mountains are where a player most needs to count tiles — the
@@ -626,48 +573,21 @@ export class Grid {
       // the screen position of the thing it is hiding behind: that is the stray dark line
       // wandering across a summit that reads as a scratch rather than as a tile boundary.
       // Summits are now one per hex and sized to it, so the rim carries ~0.4 u of rock instead
-      // of 1.14 and 0.60 clears it. It was cut to 0.20 once, on the argument that a boundary
-      // should stay behind the rock in front of it the way it stays behind a tree: the massif
-      // came back with NO lattice on it at all and lost the tournament on non-negotiable #1.
-      // A third of the board is rock here. The player counts tiles there or he counts nothing.
-      //
-      // ...and BIOME IS THE WRONG QUESTION. The badlands are desert and plains tiles standing on
-      // 1.5 u steps, so they took no bias at all, and once the rim stopped floating at heightAt's
-      // coin-flip height and sat down on its own welded corner, the tile's own wall was in front
-      // of it: rendered with the depth test off, the lattice over that mesa field is complete and
-      // draped; with it on, most of it is behind rock. The clearance a boundary needs is the SIZE
-      // OF THE STEP THE TILE SITS ON, which is exactly the relief measured above — 0.11 on level
-      // ground (where a prop must still occlude the line, and does), half a unit on a mesa rim.
-      const bias = rough ? 0.60 : Math.min(0.50, 0.11 + relief * 0.30);
-
-      // WHICH EDGES LOST THEIR OTHER HALF (see `wide` in the shader). Edge e spans this tile's
-      // corners e and e+1; the neighbour across it is DIRS[EDGE_DIR[e]] and its own corners
-      // (e+4)%6 and (e+3)%6 are the same two points. Where the corner cluster held, both tiles
-      // read the identical height and the two half-strokes butt into one line; where it split,
-      // terrain.js put a wall between them. Under 0.30 the halves still land within a stroke of
-      // each other and merge as they always did.
-      let cliff = 0;
-      for (let e = 0; cY && e < 6; e++) {
-        const dd = DIRS[EDGE_DIR[e]], nb = map.get(t.q + dd.q, t.r + dd.r);
-        if (!nb) { cliff |= 1 << e; continue; }   // the map edge: terrain walls it down to the floor
-        const drop = Math.max(Math.abs(cY[i * 6 + e] - cY[nb.i * 6 + (e + 4) % 6]),
-                              Math.abs(cY[i * 6 + (e + 1) % 6] - cY[nb.i * 6 + (e + 3) % 6]));
-        if (drop > 0.30) cliff |= 1 << e;
-      }
+      // of 1.14: the stroke lands on the mass's own shoulder, within a fifth of a hex of the
+      // edge it marks, and reads as a joint in the rock rather than a wire across the face.
+      const bias = rough ? 0.60 : 0;
 
       const key = ((t.q / CH_Q) | 0) * 64 + ((t.r / CH_R) | 0);
       let ch = chunks.get(key);
-      if (!ch) chunks.set(key, ch = { pos: [], loc: [], uv: [], fd: [], bs: [], cf: [], idx: [] });
+      if (!ch) chunks.set(key, ch = { pos: [], loc: [], uv: [], fd: [], bs: [], idx: [] });
       const b = ch.pos.length / 3;
       const uvx = (t.q + 0.5) / map.w, uvy = (t.r + 0.5) / map.h, fsign = water ? -fade : fade;
-      const put = (x, y, z, lx, lz) => { ch.pos.push(x, y, z); ch.loc.push(lx, lz); ch.uv.push(uvx, uvy); ch.fd.push(fsign); ch.bs.push(bias); ch.cf.push(cliff); };
+      const put = (x, y, z, lx, lz) => { ch.pos.push(x, y, z); ch.loc.push(lx, lz); ch.uv.push(uvx, uvy); ch.fd.push(fsign); ch.bs.push(bias); };
 
-      put(p.x, this.tileY(i, 0, 0) + lift, p.z, 0, 0);
+      put(p.x, this.surfY(p.x, p.z) + lift, p.z, 0, 0);
       for (const R of RINGS) for (let k = 0; k < NR; k++) {
-        const e = k >> 1, e2 = (e + 1) % 6, ht = (k & 1) * 0.5;      // NR = 6 edges x 2 samples
-        const lx = (cx(e) + (cx(e2) - cx(e)) * ht) * R, lz = (cz(e) + (cz(e2) - cz(e)) * ht) * R;
-        const y = R === 1 ? cyk(e) + (cyk(e2) - cyk(e)) * ht + EDGE_LIFT : this.tileY(i, lx, lz) + lift;
-        put(p.x + lx, y, p.z + lz, RIM[k][0] * R, RIM[k][1] * R);
+        const wx = p.x + RIM[k][0] * R, wz = p.z + RIM[k][1] * R;
+        put(wx, this.surfY(wx, wz) + (R === 1 ? EDGE_LIFT : lift), wz, RIM[k][0] * R, RIM[k][1] * R);
       }
       for (let k = 0; k < NR; k++) {
         const k2 = (k + 1) % NR;
@@ -686,7 +606,6 @@ export class Grid {
       g.setAttribute('aTile', new THREE.BufferAttribute(new Float32Array(ch.uv), 2));
       g.setAttribute('aFade', new THREE.BufferAttribute(new Float32Array(ch.fd), 1));
       g.setAttribute('aBias', new THREE.BufferAttribute(new Float32Array(ch.bs), 1));
-      g.setAttribute('aCliff', new THREE.BufferAttribute(new Float32Array(ch.cf), 1));
       g.setIndex(new THREE.BufferAttribute(new Uint16Array(ch.idx), 1));
       g.computeBoundingSphere();
       const m = new THREE.Mesh(g, this.mat); m.renderOrder = 12;
