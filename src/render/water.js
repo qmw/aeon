@@ -1107,13 +1107,9 @@ const COMMON = /* glsl */`
   // How hard the surf works this stretch of coast: one low-frequency field sampled along the
   // shore, so a headland breaks white and the bay beside it barely laps. A foam ring of
   // constant width piped around every cove is the loudest "decal" tell a coastline can have.
-  // ...and a SECOND octave at headland scale (5.3 u, about one hex): a 21 u field is a whole
-  // bay, so on its own it still pipes a constant-width band round every cove inside one. The
-  // short octave is what makes the surf SCALLOP — white on the points, thin in the bights.
   float exposure(vec2 wxz) {
     float e = texture2D(uNoise, wxz * (1.0 / 21.0) + 0.31).b;
-    float s = texture2D(uNoise, wxz * (1.0 / 5.30) + 0.77).b;
-    return (0.26 + 1.62 * e * e) * (0.62 + 0.76 * s);
+    return 0.26 + 1.62 * e * e;
   }
 
   const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
@@ -1222,19 +1218,16 @@ const COMMON = /* glsl */`
          + (texture2D(uNoise, wxz * (1.0 / 2.10) + 0.17).b - 0.5) * 0.30;
   }
 
-  // THE REFRACTED SET, as one phase field, shared by the sea, the seabed and the beach run-up.
-  // Inside the shoal a swell turns until its crests lie parallel to the coast, so an ISOLINE OF
-  // THE DISTANCE FIELD is already a crest line — and a wave that feels the bottom SHORTENS
-  // (shallow water: L = T*sqrt(gh)), so the set compresses as it comes ashore: 1.25 u out on the
-  // shelf edge closing to 0.62 u at the beach. That compression is the cue that reads as DEPTH,
-  // and it is why the shelf can stop being a flat band between foam and blue.
+  // THE SHOALING SET. An isoline of the distance field is already a crest line — a swell
+  // refracts until it lies parallel to the coast — and a wave that feels the bottom SHORTENS
+  // (shallow water: L = T*sqrt(gh)), so the set compresses as it comes ashore: ~1.05 u out on
+  // the shelf edge closing to ~0.63 u at the beach. That compression is the cue that reads as
+  // DEPTH, and it is why the shelf can stop being a flat band between the foam and the blue.
   // The phase is the INTEGRAL of 1/L, never sd/L(sd): a spatially varying divisor adds
-  // sd*dL/dsd to the local wavenumber, which piles every crest in the set into one wall.
-  float swellPhase(float sd, float t) {
-    return fract(sd * (1.0 / 1.25) + 0.62 * (1.0 - exp(-max(sd, 0.0) * 1.30)) - t * 0.30);
-  }
-  float swellBand(float ph) {
-    return smoothstep(0.02, 0.13, ph) * (1.0 - smoothstep(0.13, 0.46, ph));
+  // sd*dL/dsd to the local wavenumber and piles every crest in the set into one wall.
+  float shoalComb(float sd, float t) {
+    float ph = fract(sd * (1.0 / 1.05) + 0.55 * (1.0 - exp(-max(sd, 0.0) * 1.15)) - t * 0.30);
+    return smoothstep(0.04, 0.30, ph) * (1.0 - smoothstep(0.30, 0.74, ph));
   }
 
   // The sky the water mirrors: the dome's horizon->zenith ramp plus the sun's aureole. Under a
@@ -1548,11 +1541,7 @@ const OCEAN_FRAG = /* glsl */`
     // white flake over the shallows — measured, the whole shelf at Aurelia came back as a mat
     // of 20-30 px cream cornflakes with no blue left in it. A wave over sand shows itself in
     // the CAUSTIC net on the bottom, not by doubling the brightness of the water above it.
-    // ...but NOT to nothing. At a 0.26 floor the shelf lost the swell entirely — measured on
-    // the champion frame, HF_rms 5.6 at MID/HF 2.26 outboard of the foam. Half strength keeps
-    // the crest streaks running unbroken from the deep to the foam line; the shelf's EXTRA
-    // wave read is the shoaling band on the bed below, not more gain up here.
-    float shoalShade = mix(0.52, 1.0, smoothstep(0.06, 1.15, depth));
+    float shoalShade = mix(0.26, 1.0, smoothstep(0.08, 1.05, depth));
     cm *= shoalShade; blob *= shoalShade;
 
     // Slope budget. The octaves are RMS-normalised in buildNoiseTexture, so each contributes the
@@ -1592,14 +1581,12 @@ const OCEAN_FRAG = /* glsl */`
     // water in the frame and the sun makes a POINT on them. That is where sea sparkle comes from.
     rough *= mix(1.0, 0.55, smoothstep(0.40, 0.95, chop));
 
-    // ---- the refracted set, hoisted above the column because the SHELF's wave read has to
-    // arrive through the water rather than on top of it: over sand nine tenths of the pixel is
-    // transmitted bed light, so the swell has to reach the seabed (below) before it reaches the
+    // ---- the travelling bands, hoisted above the column because the SHELF's wave read has to
+    // arrive THROUGH the water rather than on top of it: over sand nine tenths of the pixel is
+    // transmitted bed light, so the set has to reach the seabed (below) before it reaches the
     // surface shading. sdA/sdC stay down in the shoreline block; they are edges, not waves.
     float wander = wanderAt(p) * mix(1.0, 2.30, vLake);
     float sd  = sdRaw + wander + (nD.b - 0.5) * 0.30;
-    float ph = swellPhase(sd, uTime);
-    float band = swellBand(ph);
 
     // ---- the water column: Beer-Lambert transmittance over a bed shaded HERE, plus in-scatter
     // saturating at the body colour of deep water. Red is six times blue, so every extra
@@ -1616,7 +1603,18 @@ const OCEAN_FRAG = /* glsl */`
     depth = mix(max(0.0, vWorld.y - (FR.g * 10.0 - 3.0)), 2.6, rimK);
     if (vLake > 0.5) depth = min(depth, 1.5);
     float bedWob = (nA.b - 0.5) * 0.55 + (nB.b - 0.5) * 0.40;
-    float d2 = max(0.02, depth + bedWob * 0.16 * smoothstep(0.0, 0.7, depth));
+    // THE SHOALING SET, AND IT GOES IN THE OPTICAL PATH RATHER THAN ON TOP OF IT. Over a shelf
+    // nine tenths of the pixel is transmitted bed light, so a brightness gain up at the surface
+    // is a cream cornflake — measured twice on this file. What a wave actually does in thin
+    // water is change the DEPTH under it, and depth is an EXPONENT: eight centimetres of swell
+    // swings the blue channel ~20% and the red channel five times that, so a shoaling set reads
+    // as coast-parallel banding in COLOUR, warm-through-to-blue, which is what shallow water
+    // over sand looks like. The amplitude grows as the water thins, and that growth IS the
+    // depth cue — it is why the shelf stops being a flat band between the foam and the blue.
+    float shelfK = 1.0 - smoothstep(0.20, 1.30, depth);
+    float comb = shoalComb(sd, uTime);
+    float d2 = max(0.02, depth + bedWob * 0.16 * smoothstep(0.0, 0.7, depth)
+                       - (comb - 0.34) * 0.62 * shelfK * min(depth, 0.55));
     // Beer-Lambert wants the PATH, not the depth: light goes down at the sun's refracted angle
     // and comes back up at the view's, so even a hand's depth is two or three times that much
     // attenuation. Leaving the obliquity out is most of why a foreshore reads as dry sand
@@ -1625,8 +1623,13 @@ const OCEAN_FRAG = /* glsl */`
                 * mix(1.0, 1.65, vLake);
     vec3 T = exp(-pathT * vec3(4.20, 1.45, 0.72));
     // Sand under water is WET sand: about half the albedo of the dry beach two metres away.
+    // ...and on the shelf the BED IS VISIBLE, so it gets its own relief: the 1.02 u octave at
+    // three times the deep-water weight, band-limited by f3 (it is a mipped world-space lookup,
+    // so this dies with the footprint instead of becoming distance confetti). Sand under a
+    // metre of water is a rippled floor, not a flat plate of albedo.
     vec3 bedCol = mix(vec3(0.062, 0.055, 0.047), vec3(0.340, 0.292, 0.252), FR.b)
-                * (0.90 + 0.18 * nC.b) * mix(1.0, 0.60, vLake);
+                * (0.90 + 0.18 * nC.b) * mix(1.0, 0.60, vLake)
+                * (1.0 + (nC.b + nD.b - 1.04) * 0.62 * shelfK * f3);
     // In-scatter, saturating at the body colour of deep water. R:G:B here IS the hue of the sea,
     // and it is keyed to the palette: the bible's ocean is #123A63 (hue 211, value 0.39) and its
     // coast #2E7C93 (hue 194). The last pass shipped hue 221 at value 0.62 — periwinkle — because
@@ -1664,24 +1667,20 @@ const OCEAN_FRAG = /* glsl */`
     // is 20-40 SCREEN PIXELS across, which is not a caustic net, it is a cream cornflake — the
     // shelf's other blob source. A caustic is the focus LINE of a wave lens: decimetre-scale,
     // and thin. Half the tile, a harder cut, and the ridge comes out as a net.
-    // Halving AGAIN to 0.50 / 0.31 was tried and reverted: it bought nothing on the shelf
-    // (HF 5.64 -> 5.76) and turned the near-field harbour into silver speckle. A finer cut of
-    // an already-thin ridge is not a finer net, it is noise.
     vec2 cD = p + vec2(0.31, -0.95) * (uTime * 0.055);
     float ca1 = texture2D(uNoise, cD * (1.0 / 0.95), 0.9).b;
     float ca2 = texture2D(uNoise, (p * mat2(0.62, 0.78, -0.78, 0.62) + vec2(-0.87, 0.49) * (uTime * 0.040)) * (1.0 / 0.58), 0.9).b;
     float caus = pow(max(0.0, 1.0 - abs(ca1 - ca2) * 14.0), 3.0);
     // ~0.6 px of chromatic split: a caustic is refracted light and its edges are dispersive.
     float causR = pow(max(0.0, 1.0 - abs(texture2D(uNoise, (cD + vec2(0.014, 0.009)) * (1.0 / 0.95), 0.9).b - ca2) * 11.5), 3.0);
-    // ...and they gather UNDER THE CRESTS, because a caustic IS the focus line of a wave lens.
-    // ...and the net is COMBED BY THE REFRACTED SET, and lit twice as hard. A caustic is the
-    // focus line of a wave lens, so the lenses stripe with the swell that made them: gathering
-    // the net under the shoaling bands turns the seabed into coast-parallel caustic banding
-    // whose spacing closes as the water shallows. That is the shelf's OWN material — bed light,
-    // not surface gain — and it is what makes foam -> shallow -> deep read as one depth ramp
-    // instead of three flat stacked bands.
-    caus *= (0.30 + 0.95 * smoothstep(0.12, 0.72, chop)) * (0.70 + 1.10 * band);
-    float causA = smoothstep(1.55, 0.03, depth) * clamp(uSun.y * 2.4, 0.0, 1.0)
+    // ...and they gather UNDER THE CRESTS, because a caustic IS the focus line of a wave lens —
+    // and on a shelf those lenses are the SHOALING SET, so the net combs into coast-parallel
+    // BANDING whose spacing closes as the water thins. That banding is the shelf's own material,
+    // and it is bed light rather than surface gain: over sand a crest gain up here reads as a
+    // cream cornflake, while the same wave read from the bottom reads as water over sand. It is
+    // also what makes foam -> shallow -> deep one depth ramp instead of three stacked bands.
+    caus *= (0.34 + 1.05 * smoothstep(0.12, 0.72, chop)) * (1.0 + 1.60 * comb * shelfK);
+    float causA = smoothstep(1.45, 0.03, depth) * clamp(uSun.y * 2.4, 0.0, 1.0)
                 * (1.0 - 0.30 * vLake) * mix(0.35, 1.0, f2);
     caus *= causA;
     vec3 causC = vec3(causR, caus, caus * 0.92);
@@ -1702,7 +1701,7 @@ const OCEAN_FRAG = /* glsl */`
     vec3 light = sceneLight(0.16 + 0.84 * ndl, 0.86 + 0.14 * shadow) * vec3(0.62, 0.92, 1.16);
     // The caustic net lands twice: on the bed, and — weaker — in the column itself, which keeps
     // it visible past the depth where the bed's own transmittance has gone to nothing.
-    vec3 col = (bedCol * (1.0 + causC * 2.10 * shadow) * T
+    vec3 col = (bedCol * (1.0 + causC * (1.05 + 5.20 * shelfK) * shadow) * T
               + scatter * (1.0 - T) * (1.0 + caus * 0.26 * shadow)) * light;
     // WAVE SHADING ON THE WHOLE COLUMN. Every crest term above rides the IN-SCATTER, and over a
     // sand shelf the in-scatter is a tenth of the pixel — the bed's transmitted light is the
@@ -1814,12 +1813,12 @@ const OCEAN_FRAG = /* glsl */`
     // the water knows where the land is. An ISOLINE OF THE DISTANCE FIELD is already a line
     // parallel to the coast, so one periodic function of sd gives the whole refracted set at
     // once, marching inshore and curving round every headland for free.
+    float ph = fract(sd * (1.0 / 1.25) - uTime * 0.30);
+    float band = smoothstep(0.02, 0.13, ph) * (1.0 - smoothstep(0.13, 0.46, ph));
     col *= 1.0 + (band - 0.24) * 0.44 * breakZone * fetch * (0.60 + 0.60 * xp);
-    // Three crest lines stand off the beach at once — now at 0.6 / 1.4 / 2.3 u out (the set
-    // shortens inshore, see swellPhase) and 0.4 / 0.14 / 0.05 of full strength. The steeper
-    // decay is deliberate: at 1.10 the tail was still 20% white two hexes out, and 20% white
-    // on blue is not foam and not water, it is the pale sheet the shelf was rejected for.
-    float surf = band * exp(-max(sd, 0.0) * 1.45) * breakZone * fetch * (0.70 + 0.95 * xp);
+    // decay slow enough that three crest lines stand off the beach at once, at 1.25 / 2.50 /
+    // 3.75 u out and 0.46 / 0.21 / 0.10 of full strength: a set of breakers building on a beach.
+    float surf = band * exp(-max(sd, 0.0) * 1.10) * breakZone * fetch * (0.70 + 0.95 * xp);
     // the swash sheet right at the lip, phased off the same bands
     float inner = (1.0 - smoothstep(0.06, 0.26 + 0.34 * xp, sdC)) * calm * (0.40 + 0.85 * band);
 
@@ -1827,16 +1826,11 @@ const OCEAN_FRAG = /* glsl */`
     // hard 0.18-0.68 window this used to close on turned the mat into a field of 1 px white
     // dashes and put 24 HF_rms into the near bay against a 15 ceiling, which is confetti by any
     // measure. A wider window keeps the lace and loses the dashes.
-    float foam = contact * 0.88 + inner * 0.34 + surf * 1.05
+    float foam = contact * 0.72 + inner * 0.34 + surf * 1.05
                + shoalMask * shoalMask * band * 0.26 * calm * fetch * breakZone;
     foam *= 0.52 + 0.86 * smoothstep(0.10, 0.56, bub);
     foam = max(foam, contact * (0.16 + 0.90 * smoothstep(0.14, 0.62, bub)) * mix(1.0, 0.60, vLake));
-    // NARROW AND CRISP. The 0.10-0.80 window this used to close on ramped foam over four world
-    // units of shelf, which is the pale sheet the shelf was rejected for: half of it was 20%
-    // white on blue, i.e. neither foam nor water. A short window plus the steeper surf decay
-    // above puts the break in a ~2 u lace that scallops with exposure() and leaves the shelf to
-    // the water.
-    foam = smoothstep(0.17, 0.63, foam);
+    foam = smoothstep(0.10, 0.80, foam);
     // Whitecaps are RARE. A shelf sea under a working breeze breaks on maybe one crest in
     // twenty, and a field of evenly spaced white dashes is the loudest stamped-texture tell open
     // water has. Wide windows on BOTH gates: a narrow window on the Jacobian is a contour of the
@@ -1898,7 +1892,7 @@ const OCEAN_FRAG = /* glsl */`
     // back at HF_rms 35 against a 15 ceiling with the shoal weight alone. Deep water carries the
     // band; a shelf shows its waves in the caustic net on the bottom instead.
     float gA = clamp(grain, -0.70, 0.70) * K_GRAIN * uK0.x * aRef * mix(0.82, 1.0, vBody) * mix(0.35, 1.0, f3)
-             * mix(0.14, 1.0, smoothstep(0.14, 1.05, depth));
+             * mix(0.09, 1.0, smoothstep(0.30, 1.50, depth));
     float gB = clamp(midS,  -0.80, 0.80) * K_MIDS  * uK0.w * aRef * mix(0.82, 1.0, vBody) * mix(0.55, 1.0, f2) * shoalBand;
     gA = gA / sqrt(1.0 + gA * gA / 0.3844);          // saturates at +-0.62
     gB = gB / sqrt(1.0 + gB * gB / 1.2100);          // saturates at +-1.10
@@ -1943,7 +1937,7 @@ const OCEAN_FRAG = /* glsl */`
             // sparkle that fires there does not read as sun on water — it reads as crushed
             // foil, which is what it turned the harbour at Aurelia into on the first build.
             // A sheltered basin is calm; the open sea is where the glitter lives.
-            * smoothstep(0.22, 1.15, depth) * (1.0 - 0.55 * vLake));
+            * smoothstep(0.35, 1.60, depth) * (1.0 - 0.55 * vLake));
 
     // ---- THE BOARD. The hex lattice, drawn on the water AFTER the water is shaded, off the
     // still plane and never off the wave normal. This is a turn-based strategy game: a player
@@ -2054,9 +2048,9 @@ const SHORE_FRAG = /* glsl */`
 
     // the exact band set the sea runs, continued up the sand: same period, same phase, same
     // scroll, so the run-up on the beach is the tail of the wave that broke on the water
-    float ph = swellPhase(sd, uTime);
-    float band = swellBand(ph);
-    float reach = (1.0 - smoothstep(-0.02, 0.05 + 0.11 * xp, inl)) * (1.0 - smoothstep(0.4, 1.2, above));
+    float ph = fract(sd * (1.0 / 1.25) - uTime * 0.30);
+    float band = smoothstep(0.02, 0.13, ph) * (1.0 - smoothstep(0.13, 0.46, ph));
+    float reach = (1.0 - smoothstep(-0.02, 0.06 + 0.16 * xp, inl)) * (1.0 - smoothstep(0.4, 1.2, above));
     float fetch = mix(0.16, 1.0, clamp(vFetch, 0.0, 1.0));
     // Surf belongs on the WATER. What lands on the sand is a thin swash lip, nothing more:
     // the last pass painted near-white blobs most of a hex inland and they read as snow.
@@ -2071,30 +2065,34 @@ const SHORE_FRAG = /* glsl */`
     float k = mix(1.0, 0.66, wet);
     // Wet sand deepens toward ITS OWN hue: saturation up, value down, hue unmoved. The
     // blue-shift this used to carry was the violet slab a critic has named four times.
-    vec3 tint = mix(vec3(1.0), vec3(1.02, 1.00, 0.97), wet);
+    // A flat multiply DARKENS without saturating — S = (max-min)/max is scale-invariant — so
+    // the chroma has to be pushed by hand: R up, B down, which is what wet grain does to sand.
+    vec3 tint = mix(vec3(1.0), vec3(1.05, 1.00, 0.93), wet);
 
     // roughness 0.85 dry -> 0.28 at the tide line: wet grain is a mirror of wet grain
     vec3 N = normalize(vec3((nD.r - 0.5) * 0.22 * f4, 1.0, (nD.g - 0.5) * 0.22 * f4));
     vec3 H = normalize(V + uSun);
     vec3 film = sunSpec(N, V, H, mix(0.85, 0.28, wet), 1.15) * shadow * wet * (1.0 - foam) * 0.85;
 
-    // Swash ON SAND, not foam on water. Sea foam is cooler than the water it floats on; a mat
-    // of bubbles lying on a beach is lit by the same golden key as the sand and carries the
-    // sand's own bounce up through itself, so it is warm-neutral. A blue-grey plate here is the
-    // cool veil this file has been named for.
-    vec3 foamCol = vec3(0.54, 0.51, 0.47) * (0.60 + 0.60 * shadow) * mix(0.72, 1.18, churn) * 0.70;
+    // Swash ON SAND, not foam on water. Sea foam floating on blue is cooler than the water it
+    // lies on; a mat of bubbles lying on a BEACH is lit by the same golden key as the sand and
+    // carries the sand's own bounce up through itself, so it is warm-neutral. Same value as the
+    // blue-grey this replaces (luma 0.42) — only the hue moves, because the blue-grey plate is
+    // the cool veil this band has been named for.
+    vec3 foamCol = vec3(0.55, 0.52, 0.48) * (0.60 + 0.60 * shadow) * mix(0.72, 1.18, churn) * 0.80;
 
     float a = 1.0 - k * (1.0 - foam);
     if (a < 0.004 && foam < 0.004) discard;
     // NO aerial() HERE, and that is the rest of the veil. This decal lies ON the terrain, at the
     // terrain's own depth, and post.js already hazes it with everything else behind it — so the
-    // sea's own airlight ramp (58% of a cool grey by the far edge of a gameplay frame) was a
-    // SECOND haze applied to the shore band alone. Measured: it took a warm sand pixel from
-    // hue 27 / sat 0.25 to hue 291 / sat 0.03. The sea needs aerial() because it runs to the
-    // horizon; a beach apron never leaves the near field.
+    // sea's own airlight ramp (up to 58% of a cool grey, plus a 40% chroma cut, over the eight
+    // world units a gameplay frame spans) was a SECOND haze applied to the shore band alone.
+    // The sea needs aerial() because it runs to the horizon; a beach apron never leaves the
+    // near field. Measured on the champion frame: the sand inside this band came back at
+    // hue 247 / saturation 0.15 — a violet slab on a warm beach.
     vec3 src = foamCol * foam + film;
     // the multiplicative half rides in the alpha; the tint rides as a touch of extra src
-    src += (1.0 - k) * (tint - vec3(1.0)) * 0.6;
+    src += (1.0 - k) * (tint - vec3(1.0));
     gl_FragColor = vec4(src, clamp(a, 0.0, 1.0));
   }
 `;
