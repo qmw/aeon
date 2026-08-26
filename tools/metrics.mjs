@@ -41,7 +41,7 @@ const out = await p.evaluate(async ({ url, regions }) => {
     }
     const HF = Math.sqrt(hf / n), MID = Math.sqrt(mid / n);
     let hue = hn ? Math.atan2(hy / hn, hx / hn) * 180 / Math.PI : -1; if (hue < 0 && hn) hue += 360;
-    stats.push({ name: R.name, mean: +(L / n).toFixed(1), sat: +(S / n).toFixed(3), hue: +hue.toFixed(1), HF_rms: +HF.toFixed(2), MID_rms: +MID.toFixed(2), MID_over_HF: +(MID / (HF || 1e-6)).toFixed(2) });
+    stats.push({ name: R.name, x: R.x, y: R.y, w: R.w, h: R.h, mean: +(L / n).toFixed(1), sat: +(S / n).toFixed(3), hue: +hue.toFixed(1), HF_rms: +HF.toFixed(2), MID_rms: +MID.toFixed(2), MID_over_HF: +(MID / (HF || 1e-6)).toFixed(2) });
   }
   let crushed = 0, blown = 0;
   for (let i = 0; i < lum.length; i++) { if (lum[i] < 4) crushed++; if (lum[i] > 250) blown++; }
@@ -49,6 +49,15 @@ const out = await p.evaluate(async ({ url, regions }) => {
 }, { url: 'data:image/png;base64,' + readFileSync(file).toString('base64'), regions });
 // Two-sided gate. HF alone is gameable: spraying per-pixel noise raises it while destroying
 // material structure, so MID/HF is bounded on BOTH sides and detail must fall off with distance.
+// REGION GUARD: the sample regions are calibrated for a 1600x900 frame. Measuring a smaller
+// screenshot with them silently samples the HUD or off-canvas and reports a bogus FAIL — that
+// has now misled a judge and a human at least once each.
+if (out.size[0] !== 1600 || out.size[1] !== 900) {
+  out.warning = `image is ${out.size[0]}x${out.size[1]}, not 1600x900 — the standard sample regions do not apply; re-shoot at 1600x900 before trusting these numbers`;
+}
+for (const r of out.regions) {
+  if (r.x + r.w > out.size[0] || r.y + r.h > out.size[1]) out.warning = (out.warning ? out.warning + ' ' : '') + `region ${r.name} falls outside the image`;
+}
 const BANDS = { HF: [12, 22], MID_over_HF: [0.9, 1.3], sat: [0.28, 0.46] };
 const fails = [];
 for (const r of out.regions) {

@@ -1,13 +1,27 @@
-# Resume notes — paused 2026-08-26
+# Resume notes — paused 2026-08-26 (updated after phase 16 partial)
 
 ## State
 - Live: https://qmw.github.io/aeon/ · Repo: https://github.com/qmw/aeon (public, MIT)
 - `main` is at `98b4a9c` "grounding: promoted to champion" — metric gate **PASS** (ramp 1.61),
   260-turn sim passes, `npx vite build` succeeds. This is the best verified state.
 - Champion frame: `shots/champion.png`. Release frames: `shots/final-*.png`.
-- Unfinished cliff-grid work is parked on branch **`wip/cliffgrid`**. It broke the gate
-  (near/far ramp 0.93, mid-sand HF 24.6), so it was kept off `main` because `main` auto-deploys
-  to the public link. Resume it there or discard it.
+- `main` is at `e7b2f8f`. Gate PASS at 1600x900 (ramp 1.6; near-sand 22.2 sits 1% over its 22
+  ceiling, which is noise-level and was the same before this phase).
+- Two unfinished branches are parked off `main`, because `main` auto-deploys to the public link:
+  - **`wip/cliffgrid`** — first cliff-grid attempt; broke the detail ramp (0.93 vs 1.6 required).
+  - **`wip/rivers`** — river/lake bank blending, depth gradient and reflection, mid-attempt and
+    never judged. Renders, builds, sim passes; simply unfinished.
+- Phase 16 so far: cliff grid ran three attempts and LOST the tournament again (reverted in
+  `e7b2f8f`). That makes the hex-grid-on-cliffs problem 6 failed attempts across two phases — it
+  is the most stubborn defect in the project and probably needs a different approach entirely,
+  not another iteration of the same one.
+
+## A measurement trap worth remembering
+`tools/metrics.mjs` sample regions are calibrated for a **1600x900** frame. Measuring a 1280x720
+screenshot with them samples the HUD and off-canvas areas and reports a confident, entirely bogus
+FAIL — it briefly looked like the build had regressed when nothing had changed. The tool now emits
+a `warning` field when the image is not 1600x900 or a region falls outside it. Trust the gate only
+on a full-size shot.
 
 ## How the loop works now (do not regress these)
 1. **Tournament gate, not scores.** Every change is compared head to head against the reigning
